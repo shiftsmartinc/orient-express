@@ -6,7 +6,7 @@ jobs:
   build-and-test:
     name: Build and test
     runs-on: ubuntu-latest
-
+    if: github.ref != 'refs/heads/main'
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python
@@ -50,7 +50,7 @@ jobs:
         run: |
           python setup.py sdist bdist_wheel
 
-      - name: Upload package to Test PyPI
+      - name: Upload package to PyPI
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
