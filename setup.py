@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="orient_express",
-    version="0.1.0",
+    version="0.1.1",
     description="A single-module library for [describe functionality briefly]",
     author="Alex Zankevich",
     author_email="alex.zankevich@shiftsmart.com",
