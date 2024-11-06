@@ -7,7 +7,7 @@ A library to accelerate model deployments to Vertex AI directly from colab noteb
 
 ### Train Model
 
-Train a regular model. In the example below, it's xgboost model.
+Train a regular model. In the example below, it's xgboost model, trained on the Titanic dataset.
 
 ```python
 
