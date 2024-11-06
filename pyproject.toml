@@ -10,12 +10,12 @@ python = ">=3.9"
 google-cloud-aiplatform = "*"
 google-cloud-storage = "*"
 pandas = "*"
-scikit-learn = "^1.5.2"
-xgboost = "^2.1.2"
 
 [tool.poetry.dev-dependencies]
 black = "24.10.0"
 pytest = "8.3.3"
+scikit-learn = "1.5.2"
+xgboost = "2.1.2"
 
 [build-system]
 requires = ["poetry-core"]
