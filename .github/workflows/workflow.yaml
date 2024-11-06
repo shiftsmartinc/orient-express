@@ -53,6 +53,8 @@ jobs:
   publish-to-testpypi:
     name: Publish Python 🐍 distribution 📦 to Test PyPI
     runs-on: ubuntu-latest
+    environment:
+      name: testpypi
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
