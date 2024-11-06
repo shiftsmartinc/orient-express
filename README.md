@@ -81,13 +81,13 @@ The following code will download the last model from the model registry and run 
 
 # create input dataframe
 titanic_data = {
-    "pclass": [1],              # Passenger class (1st, 2nd, 3rd)
+    "pclass": [1],          # Passenger class (1st, 2nd, 3rd)
     "sex": ["female"],      # Gender
-    "age": [29],                # Age
-    "sibsp": [0],                # Number of siblings/spouses aboard
-    "parch": [0],                # Number of parents/children aboard
-    "fare": [100.0],          # Ticket fare
-    "embarked": ["S"]          # Port of Embarkation (C = Cherbourg, Q = Queenstown, S = Southampton)
+    "age": [29],            # Age
+    "sibsp": [0],           # Number of siblings/spouses aboard
+    "parch": [0],           # Number of parents/children aboard
+    "fare": [100.0],        # Ticket fare
+    "embarked": ["S"]       # Port of Embarkation (C = Cherbourg, Q = Queenstown, S = Southampton)
 }
 input_df = pd.DataFrame(titanic_data)
 
@@ -113,4 +113,37 @@ model_wrapper  = ModelExpress(project_name='my-project-name',
                              region='us-central1',
                              model_name='titanic',
                              model_version=11)
+```
+
+## Remote Inference (With Online Prediction Endpoint)
+
+Make sure the model is deployed:
+```python
+
+model_wrapper  = ModelExpress(model=model,
+                             project_name='my-project-name',
+                             region='us-central1',
+                             bucket_name='my-artifacts-bucket',
+                             model_name='titanic')
+
+# upload the version to the registry and deploy it to the endpoint
+model_wrapper.deploy()
+```
+
+Run inference with `remote_predict` method. It will make a remote call to the endpoint without fetching the model locally.
+
+```python
+
+titanic_data = {
+    "pclass": [1],             # Passenger class (1st, 2nd, 3rd)
+    "sex": ["female"],         # Gender
+    "age": [29],               # Age
+    "sibsp": [0],              # Number of siblings/spouses aboard
+    "parch": [0],              # Number of parents/children aboard
+    "fare": [100.0],           # Ticket fare
+    "embarked": ["S"]          # Port of Embarkation (C = Cherbourg, Q = Queenstown, S = Southampton)
+}
+df = pd.DataFrame(titanic_data)
+
+model_wrapper.remote_predict(df)
 ```
