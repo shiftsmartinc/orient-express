@@ -7,14 +7,21 @@ from google.cloud import aiplatform
 
 
 class ModelExpress:
-    def __init__(self, model_name,
-                 project_name,
-                 bucket_name,
-                 model_version=None,
-                 model=None,
-                 region='us-central1', serialized_model_path='model.joblib',
-                 docker_image_uri="us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.1-7:latest",
-                 endpoint_name=None, machine_type="n1-standard-4", min_replica_count=1, max_replica_count=1):
+    def __init__(
+        self,
+        model_name,
+        project_name,
+        bucket_name,
+        model_version=None,
+        model=None,
+        region="us-central1",
+        serialized_model_path="model.joblib",
+        docker_image_uri="us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.1-7:latest",
+        endpoint_name=None,
+        machine_type="n1-standard-4",
+        min_replica_count=1,
+        max_replica_count=1,
+    ):
         self.model = model
         self.model_name = model_name
         self.model_version = model_version
@@ -29,7 +36,7 @@ class ModelExpress:
         self.endpoint = None
 
         if not endpoint_name:
-            self.endpoint_name = f'model-xpress-{model_name}'
+            self.endpoint_name = f"model-xpress-{model_name}"
         else:
             self.endpoint_name = endpoint_name
 
@@ -41,6 +48,7 @@ class ModelExpress:
 
     def colab_auth(self):
         from google.colab import auth
+
         auth.authenticate_user()
 
     def _vertex_init(self):
@@ -62,7 +70,7 @@ class ModelExpress:
     # upload model to vertex ai model registry
     def upload(self):
         joblib.dump(self.model, self.serialized_model_path)
-        logging.info(f'Model saved to {self.serialized_model_path}')
+        logging.info(f"Model saved to {self.serialized_model_path}")
 
         # Initialize the GCS client
         client = storage.Client()
@@ -76,23 +84,27 @@ class ModelExpress:
             new_version = 1
 
         # Upload the model file
-        blob = bucket.blob(self.get_artifacts_path(new_version, self.serialized_model_path))
+        blob = bucket.blob(
+            self.get_artifacts_path(new_version, self.serialized_model_path)
+        )
         blob.upload_from_filename(self.serialized_model_path)
 
         return self.create_model_version(new_version, last_model)
 
     def get_artifacts_path(self, version, file_name=None):
-        dir_name = f'models/{self.model_name}/{version}'
+        dir_name = f"models/{self.model_name}/{version}"
         if file_name:
-            return f'{dir_name}/{file_name}'
+            return f"{dir_name}/{file_name}"
 
-        return f'{dir_name}/'
+        return f"{dir_name}/"
 
     def create_model_version(self, version_number, last_version):
-        artifact_uri = f'gs://{self.bucket_name}/{self.get_artifacts_path(version_number)}'
+        artifact_uri = (
+            f"gs://{self.bucket_name}/{self.get_artifacts_path(version_number)}"
+        )
 
         if last_version:
-            parent_model = f'projects/{self.project_name}/locations/{self.region}/models/{last_version.name}'
+            parent_model = f"projects/{self.project_name}/locations/{self.region}/models/{last_version.name}"
         else:
             parent_model = None
 
@@ -115,9 +127,8 @@ class ModelExpress:
 
     def get_endpoint(self):
         endpoints = aiplatform.Endpoint.list(
-            filter=f'display_name={self.endpoint_name}',
-            order_by='create_time'
-            )
+            filter=f"display_name={self.endpoint_name}", order_by="create_time"
+        )
         if endpoints:
             return endpoints[0]
 
@@ -133,17 +144,21 @@ class ModelExpress:
 
         endpoint = self.get_or_create_endpoint()
         model_version = self.upload()
-        model_version.deploy(endpoint=endpoint,
-                             machine_type=self.machine_type,
-                             min_replica_count=self.min_replica_count,
-                             max_replica_count=self.max_replica_count,
-                             traffic_percentage=100)
+        model_version.deploy(
+            endpoint=endpoint,
+            machine_type=self.machine_type,
+            min_replica_count=self.min_replica_count,
+            max_replica_count=self.max_replica_count,
+            traffic_percentage=100,
+        )
 
     def remote_predict(self, input_df):
         if not self.endpoint:
             endpoint = self.get_endpoint()
             if not endpoint:
-                raise Exception(f"Endpoint '{self.endpoint_name}' not found. Please deploy the model first.")
+                raise Exception(
+                    f"Endpoint '{self.endpoint_name}' not found. Please deploy the model first."
+                )
             self.endpoint = endpoint
 
         instances = self.df_to_features(input_df)
@@ -158,7 +173,9 @@ class ModelExpress:
 
     def load_model_from_registry(self):
         if self.model_version:
-            vertex_model = aiplatform.Model(model_name=self.model_name, version=self.model_version)
+            vertex_model = aiplatform.Model(
+                model_name=self.model_name, version=self.model_version
+            )
 
         else:
             vertex_model = self.get_latest_vertex_model(self.model_name)
@@ -182,4 +199,5 @@ class ModelExpress:
             blob.download_to_filename(artifact_path)
 
     def df_to_features(self, df: pd.DataFrame):
+        """"""
         return df.to_dict(orient="records")
