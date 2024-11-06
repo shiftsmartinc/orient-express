@@ -62,7 +62,6 @@ jobs:
 
       - name: Upload package to PyPI
         env:
-          POETRY_HTTP_BASIC_FOO_USERNAME: __token__
-          POETRY_HTTP_BASIC_FOO_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           poetry publish --verbose
