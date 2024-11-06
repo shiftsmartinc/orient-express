@@ -3,6 +3,12 @@ A library to accelerate model deployments to Vertex AI directly from colab noteb
 
 ![train-resized](https://github.com/user-attachments/assets/f1ed32ec-07d9-4d48-8b96-3323db6b5091)
 
+## Installation
+
+```
+pip install orient_express
+```
+
 ## Example
 
 ### Train Model
