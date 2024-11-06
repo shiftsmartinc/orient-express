@@ -104,3 +104,17 @@ model_wrapper  = ModelExpress(project_name='my-project-name',
 # It will download the most recent version from the model registry automatically
 model_wrapper.local_predict(input_df)
 ```
+
+## Pin Model Version
+
+In many cases, the pipeline should be pinned to a specific model version so the model can only
+be updated explicitly. Just pass a `model_version` parameter when instantiating the ModelExpress wrapper.
+
+```python
+
+# init the model wrapper
+model_wrapper  = ModelExpress(project_name='my-project-name',
+                             region='us-central1',
+                             model_name='titanic',
+                             model_version=11)
+```
