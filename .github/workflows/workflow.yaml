@@ -13,28 +13,29 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: "3.10"
+    - name: Install Poetry
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
+        export PATH="$HOME/.local/bin:$PATH"
+    - name: Install dependencies with Poetry
+      run: |
+        poetry install
     - name: Check code formatting with Black
       run: |
-        black --check .
-    - name: Install dependencies
-      run: |
-        pip install -r requirements-dev.txt
+        poetry run black --check .
     - name: Run tests with pytest
       run: |
-        pytest tests
+        poetry run pytest
     - name: Build a binary wheel and a source tarball
-      run: python3 -m build
+      run: |
+        poetry build
     - name: Store the distribution packages
       uses: actions/upload-artifact@v4
       with:
         name: python-package-distributions
         path: dist/
+
   publish-to-pypi:
-    name: Publish Python 🐍 distribution 📦 to PyPI
-    runs-on: ubuntu-latest
-    environment:
-      name: release
-    if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -44,17 +45,22 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install dependencies
+      - name: Install Poetry
         run: |
-          pip install setuptools wheel twine
+          curl -sSL https://install.python-poetry.org | python3 -
+          export PATH="$HOME/.local/bin:$PATH"
+
+      - name: Install dependencies with Poetry
+        run: |
+          poetry install --no-dev
 
       - name: Build the package
         run: |
-          python setup.py sdist bdist_wheel
+          poetry build
 
       - name: Upload package to PyPI
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          POETRY_HTTP_BASIC_FOO_USERNAME: __token__
+          POETRY_HTTP_BASIC_FOO_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          twine upload dist/* --verbose
+          poetry publish --verbose
