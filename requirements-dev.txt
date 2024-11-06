@@ -1,0 +1,5 @@
+google-cloud-aiplatform
+google-cloud-storage
+scikit-learn
+xgboost
+black
