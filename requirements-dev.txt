@@ -3,3 +3,5 @@ google-cloud-storage
 scikit-learn
 xgboost
 black
+pytest
+black==24.10.0
