@@ -13,16 +13,12 @@ Train a regular model. In the example below, it's xgboost model, trained on the 
 
 # Import necessary libraries
 import xgboost as xgb
-import seaborn as sns
-import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Load the Titanic dataset
 data = sns.load_dataset('titanic').dropna(subset=['survived'])  # Dropping rows with missing target labels
