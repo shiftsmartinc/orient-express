@@ -32,6 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: release
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -54,35 +55,4 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          twine upload --repository-url https://test.pypi.org/legacy/ dist/* --verbose
-
-
-  publish-to-testpypi:
-    name: Publish Python 🐍 distribution 📦 to Test PyPI
-    runs-on: ubuntu-latest
-    environment:
-      name: testpypi
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Install dependencies
-        run: |
-          pip install setuptools wheel twine
-
-      - name: Build the package
-        run: |
-          python setup.py sdist bdist_wheel
-
-      - name: Upload package to Test PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        run: |
-          twine upload --repository-url https://test.pypi.org/legacy/ dist/* --verbose
+          twine upload dist/* --verbose
