@@ -1,2 +1,2 @@
 build:
-	docker buildx build -f docker-xgboost-scikit-learn/Dockerfile .
+	docker buildx build -t orient-express:latest  -f docker-xgboost-scikit-learn/Dockerfile .

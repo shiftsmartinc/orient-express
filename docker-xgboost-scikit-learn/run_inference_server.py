@@ -1,8 +1,5 @@
 import logging
-import os
-
 from kserve import ModelServer
-from pythonjsonlogger import jsonlogger
 
 
 if __name__ == "__main__":
