@@ -199,5 +199,4 @@ class ModelExpress:
             blob.download_to_filename(artifact_path)
 
     def df_to_features(self, df: pd.DataFrame):
-        #
         return df.to_dict(orient="records")

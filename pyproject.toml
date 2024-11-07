@@ -21,6 +21,7 @@ xgboost = "2.1.2"
 scikit-learn = "1.5.2"
 kserve = "0.14.0"
 python-json-logger = "2.0.7"
+gcsfs = "^2024.10.0"
 
 [build-system]
 requires = ["poetry-core"]
