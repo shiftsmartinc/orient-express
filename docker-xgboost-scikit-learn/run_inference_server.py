@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 
@@ -29,14 +30,23 @@ class ScikitLearnPipelineModel(Model):
         return self
 
     def predict(self, inputs, *args, **kwargs):
-        logging.error(f"INPUTS: {inputs}")
-        logging.info(f"Predicting {len(inputs)} items")
+        logging.info("Executing prediction")
+        decoded_input = self.decode_input(inputs)
 
-        input_df = pd.DataFrame(inputs)
+        input_df = pd.DataFrame(decoded_input["instances"])
 
         predictions = self.model.predict(input_df)
         response = {"predictions": predictions.tolist()}
         return response
+
+    def decode_input(self, input_data):
+        logging.info(f"ShiftAssignmentFFRModelPayloadType: {type(input_data)}")
+        if isinstance(input_data, (bytes, str)):
+            return json.loads(input_data)
+        elif isinstance(input_data, dict):
+            return input_data
+        else:
+            raise Exception(f"Unsupported payload type {type(input_data)}")
 
 
 if __name__ == "__main__":
