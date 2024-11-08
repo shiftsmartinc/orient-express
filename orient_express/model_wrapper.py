@@ -16,7 +16,9 @@ class ModelExpress:
         model=None,
         region="us-central1",
         serialized_model_path="model.joblib",
-        docker_image_uri="us-docker.pkg.dev/vertex-ai/prediction/xgboost-cpu.1-7:latest",
+        serving_container_image_uri="us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xgboost-scikit-learn:latest",
+        serving_container_predict_route="/v1/models/orient-express-model:predict",
+        serving_container_health_route="/v1/models/orient-express-model",
         endpoint_name=None,
         machine_type="n1-standard-4",
         min_replica_count=1,
@@ -29,14 +31,16 @@ class ModelExpress:
         self.project_name = project_name
         self.bucket_name = bucket_name
         self.serialized_model_path = serialized_model_path
-        self.docker_image_uri = docker_image_uri
+        self.serving_container_image_uri = serving_container_image_uri
+        self.serving_container_predict_route = serving_container_predict_route
+        self.serving_container_health_route = serving_container_health_route
         self.machine_type = machine_type
         self.min_replica_count = min_replica_count
         self.max_replica_count = max_replica_count
         self.endpoint = None
 
         if not endpoint_name:
-            self.endpoint_name = f"model-xpress-{model_name}"
+            self.endpoint_name = f"orient-express-{model_name}"
         else:
             self.endpoint_name = endpoint_name
 
@@ -106,7 +110,9 @@ class ModelExpress:
             display_name=self.model_name,
             artifact_uri=artifact_uri,
             parent_model=parent_model,
-            serving_container_image_uri=self.docker_image_uri,
+            serving_container_image_uri=self.serving_container_image_uri,
+            serving_container_health_route=self.serving_container_health_route,
+            serving_container_predict_route=self.serving_container_predict_route,
             sync=True,
         )
 
@@ -199,5 +205,4 @@ class ModelExpress:
             blob.download_to_filename(artifact_path)
 
     def df_to_features(self, df: pd.DataFrame):
-        #
         return df.to_dict(orient="records")
