@@ -165,6 +165,12 @@ class ModelExpress:
 
         return self.model.predict(input_df)
 
+    def local_predict_proba(self, input_df):
+        if not self.model:
+            self.load_model_from_registry()
+
+        return self.model.predict_proba(input_df)
+
     def load_model_from_registry(self):
         if self.model_version:
             vertex_model = aiplatform.Model(
