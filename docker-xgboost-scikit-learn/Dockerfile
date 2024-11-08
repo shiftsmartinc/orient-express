@@ -7,6 +7,7 @@ RUN pip install poetry
 ADD docker-xgboost-scikit-learn/run_inference_server.py .
 ADD poetry.lock .
 ADD pyproject.toml .
+ADD docker-xgboost-scikit-learn/logging.conf .
 
 RUN poetry install --with inference
 
