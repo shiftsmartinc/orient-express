@@ -29,6 +29,7 @@ class ScikitLearnPipelineModel(Model):
         return self
 
     def predict(self, inputs, *args, **kwargs):
+        logging.error(f"INPUTS: {inputs}")
         logging.info(f"Predicting {len(inputs)} items")
 
         input_df = pd.DataFrame(inputs)
