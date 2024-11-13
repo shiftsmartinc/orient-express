@@ -44,13 +44,17 @@ class ModelExpress:
         else:
             self.endpoint_name = endpoint_name
 
+        self._vertex_initialized = False
+
     def colab_auth(self):
         from google.colab import auth
 
         auth.authenticate_user()
 
     def _vertex_init(self):
-        aiplatform.init(project=self.project_name, location=self.region)
+        if not self._vertex_initialized:
+            aiplatform.init(project=self.project_name, location=self.region)
+            self._vertex_initialized = True
 
     def get_latest_vertex_model(self, model_name):
         self._vertex_init()
@@ -153,6 +157,8 @@ class ModelExpress:
         )
 
     def remote_predict(self, input_df):
+        self._vertex_init()
+
         if not self.endpoint:
             endpoint = self.get_endpoint()
             if not endpoint:
@@ -166,6 +172,8 @@ class ModelExpress:
         return predictions.predictions
 
     def local_predict(self, input_df):
+        self._vertex_init()
+
         if not self.model:
             self.load_model_from_registry()
 
@@ -178,6 +186,8 @@ class ModelExpress:
         return self.model.predict_proba(input_df)
 
     def load_model_from_registry(self):
+        self._vertex_init()
+
         if self.model_version:
             vertex_model = aiplatform.Model(
                 model_name=self.model_name, version=self.model_version
