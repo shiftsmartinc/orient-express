@@ -57,6 +57,9 @@ class ModelExpress:
             self._vertex_initialized = True
 
     def get_latest_vertex_model(self, model_name):
+        """If there are a few models with the same name, load the most recent one.
+        It's highly recommended to keep only 1 model with the same name to avoid the confusion
+        """
         self._vertex_init()
 
         # Search for models with the specified display name
@@ -188,13 +191,13 @@ class ModelExpress:
     def load_model_from_registry(self):
         self._vertex_init()
 
-        if self.model_version:
-            vertex_model = aiplatform.Model(
-                model_name=self.model_name, version=self.model_version
-            )
+        vertex_model = self.get_latest_vertex_model(self.model_name)
 
-        else:
-            vertex_model = self.get_latest_vertex_model(self.model_name)
+        if self.model_version:
+            # reload the model using a specific model version
+            vertex_model = aiplatform.Model(
+                model_name=vertex_model.resource_name, version=str(self.model_version)
+            )
 
         if not vertex_model:
             raise Exception(f"Model '{self.model_name}' not found in the registry.")
