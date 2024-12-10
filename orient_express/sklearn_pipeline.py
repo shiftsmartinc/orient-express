@@ -1,5 +1,6 @@
 from sklearn.base import BaseEstimator, TransformerMixin
 
+
 class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
     """
     A wrapper class that integrates a model and a label encoder to handle
@@ -17,6 +18,7 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
         predict_proba(X):
             Returns the probabilities for each class for the given features, along with their original class labels.
     """
+
     def __init__(self, model, label_encoder):
         """
         Initializes the LabelEncoderTransformer.
