@@ -98,7 +98,7 @@ def expected_labels():
             "label-0",
             "label-0",
             "label-1",
-            "label-1",       5
+            "label-1",
             "label-0",
             "label-0",
             "label-0",
