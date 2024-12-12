@@ -1,4 +1,6 @@
 import os
+from typing import Optional
+
 import joblib
 import logging
 import pandas as pd
@@ -9,20 +11,20 @@ from google.cloud import aiplatform
 class ModelExpress:
     def __init__(
         self,
-        model_name,
-        project_name,
-        bucket_name,
-        model_version=None,
-        model=None,
-        region="us-central1",
-        serialized_model_path="model.joblib",
-        serving_container_image_uri="us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xgboost-scikit-learn:latest",
-        serving_container_predict_route="/v1/models/orient-express-model:predict",
-        serving_container_health_route="/v1/models/orient-express-model",
-        endpoint_name=None,
+        model_name: str,
+        project_name: str,
+        bucket_name: str,
+        model_version: Optional[int] = None,
+        model: object = None,
+        region: str = "us-central1",
+        serialized_model_path: str = "model.joblib",
+        serving_container_image_uri: str = "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xgboost-scikit-learn:latest",
+        serving_container_predict_route: str = "/v1/models/orient-express-model:predict",
+        serving_container_health_route: str = "/v1/models/orient-express-model",
+        endpoint_name: Optional[str] = None,
         machine_type="n1-standard-4",
-        min_replica_count=1,
-        max_replica_count=1,
+        min_replica_count: int = 1,
+        max_replica_count: int = 1,
     ):
         self.model = model
         self.model_name = model_name
@@ -56,7 +58,7 @@ class ModelExpress:
             aiplatform.init(project=self.project_name, location=self.region)
             self._vertex_initialized = True
 
-    def get_latest_vertex_model(self, model_name):
+    def get_latest_vertex_model(self, model_name: str):
         """If there are a few models with the same name, load the most recent one.
         It's highly recommended to keep only 1 model with the same name to avoid the confusion
         """
@@ -96,7 +98,7 @@ class ModelExpress:
 
         return self.create_model_version(new_version, last_model)
 
-    def get_artifacts_path(self, version, file_name=None):
+    def get_artifacts_path(self, version: int, file_name: str = None):
         dir_name = f"models/{self.model_name}/{version}"
         if file_name:
             return f"{dir_name}/{file_name}"
@@ -159,7 +161,7 @@ class ModelExpress:
             traffic_percentage=100,
         )
 
-    def remote_predict(self, input_df):
+    def remote_predict(self, input_df: pd.DataFrame):
         self._vertex_init()
 
         if not self.endpoint:
@@ -174,7 +176,7 @@ class ModelExpress:
         predictions = self.endpoint.predict(instances=instances)
         return predictions.predictions
 
-    def local_predict(self, input_df):
+    def local_predict(self, input_df: pd.DataFrame):
         self._vertex_init()
 
         if not self.model:
@@ -182,7 +184,7 @@ class ModelExpress:
 
         return self.model.predict(input_df)
 
-    def local_predict_proba(self, input_df):
+    def local_predict_proba(self, input_df: pd.DataFrame):
         if not self.model:
             self.load_model_from_registry()
 
@@ -207,7 +209,7 @@ class ModelExpress:
 
         self.model = joblib.load(self.serialized_model_path)
 
-    def download_artifacts(self, artifact_uri):
+    def download_artifacts(self, artifact_uri: str):
         storage_client = storage.Client()
         bucket_name, artifact_path = artifact_uri.replace("gs://", "").split("/", 1)
         bucket = storage_client.bucket(bucket_name)

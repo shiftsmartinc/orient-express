@@ -2,5 +2,5 @@ import pytest
 
 
 @pytest.fixture
-def random_seed():
+def default_seed():
     return 42

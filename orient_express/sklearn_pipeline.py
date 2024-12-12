@@ -1,4 +1,5 @@
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.preprocessing import LabelEncoder
 
 
 class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
@@ -19,13 +20,13 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
             Returns the probabilities for each class for the given features, along with their original class labels.
     """
 
-    def __init__(self, model, label_encoder):
+    def __init__(self, model: BaseEstimator, label_encoder: LabelEncoder):
         """
         Initializes the LabelEncoderTransformer.
 
         Args:
-            model (object): A machine learning model.
-            label_encoder (object): A label encoder with `fit` and `inverse_transform` methods.
+            model (BaseEstimator): A machine learning model.
+            label_encoder (LabelEncoder): A label encoder with `fit` and `inverse_transform` methods.
         """
         self.model = model
         self.label_encoder = label_encoder

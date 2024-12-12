@@ -9,13 +9,13 @@ from orient_express.sklearn_pipeline import (
 
 
 @pytest.fixture
-def sample_data(random_seed):
+def sample_data(default_seed):
     X, y = make_classification(
         n_samples=100,
         n_features=5,
         n_clusters_per_class=1,
         n_classes=3,
-        random_state=random_seed,
+        random_state=default_seed,
     )
     return X, np.array([str(f"label-{item}") for item in y])
 
@@ -38,8 +38,8 @@ def y_as_ids(label_encoder, sample_data):
 
 
 @pytest.fixture
-def transformer(label_encoder, random_seed):
-    model = RandomForestClassifier(random_state=random_seed)
+def transformer(label_encoder, default_seed):
+    model = RandomForestClassifier(random_state=default_seed)
     return LabelEncoderTransformer(model=model, label_encoder=label_encoder)
 
 
