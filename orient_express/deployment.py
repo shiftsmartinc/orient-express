@@ -1,5 +1,7 @@
 import logging
 import argparse
+from typing import Optional
+
 from kfp import compiler, dsl
 
 import conf
@@ -15,21 +17,21 @@ def delete_old_schedules(schedule_name):
 
 
 def deploy_pipeline(
-    run_type,
-    pipeline_dsl,
-    pipeline_root,
-    pipeline_name,
-    pipeline_display_name,
-    pipeline_schedule_name,
-    gcp_project,
-    gcp_location,
-    gcp_service_account,
-    gcp_network,
-    gcp_labels={},
-    cron_string="*/15 * * * *",
-    template_path="pipeline.yaml",
-    pipeline_job_parameters={},
-    max_concurrent_run_count=1,
+    run_type: str,
+    pipeline_dsl: str,
+    pipeline_root: str,
+    pipeline_name: str,
+    pipeline_display_name: str,
+    pipeline_schedule_name: str,
+    gcp_project: str,
+    gcp_location: str,
+    gcp_service_account: str,
+    gcp_network: str,
+    gcp_labels: Optional[dict[str, str]] = {},
+    cron_string: Optional[str] = "*/15 * * * *",
+    template_path: Optional[str] = "pipeline.yaml",
+    pipeline_job_parameters: Optional[dict] = {},
+    max_concurrent_run_count: Optional[int] = 1,
 ):
     """
     :param run_type: "single-run" or "scheduled"
@@ -82,7 +84,7 @@ def deploy_pipeline(
 
         pipeline_job_schedule.create(
             cron=cron_string,
-            max_concurrent_run_count=1,
+            max_concurrent_run_count=max_concurrent_run_count,
             service_account=gcp_service_account,
             network=gcp_network,
         )
