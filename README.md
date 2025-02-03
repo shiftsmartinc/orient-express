@@ -153,3 +153,81 @@ df = pd.DataFrame(titanic_data)
 
 model_wrapper.remote_predict(df)
 ```
+
+## Pipeline Deployment Function
+
+Orient express library also have a helper function to simplify Vertex AI pipeline deployment.
+
+Create `deploy.py` script
+```python
+
+from orient_express.deployment import deploy_pipeline
+
+import argparse
+import conf
+
+from pipeline import pipeline
+from orient_express.deployment import deploy_pipeline
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-type", required=True)
+
+    args = parser.parse_args()
+    deploy_pipeline(run_type=args.run_type,
+                    pipeline_dsl=pipeline,
+                    pipeline_root=conf.PIPELINE_ROOT,
+                    pipeline_name=conf.PIPELINE_NAME,
+                    pipeline_display_name=conf.PIPELINE_DISPLAY_NAME,
+                    pipeline_schedule_name=conf.SCHEDULE_NAME,
+                    gcp_project=conf.PROJECT_ID,
+                    gcp_location='us-central1',
+                    gcp_service_account=conf.SERVICE_ACCOUNT,
+                    gcp_network=conf.NETWORK_NAME,
+                    gcp_labels={"team": "ml"})
+```
+
+And conf.py, make sure to replace the sample values with yours.
+```python
+
+import os
+
+BASE_PATH = "gs://pipelines-bucket/vertex-ai/pipelines"
+
+PIPELINE_NAME = "my-pipeline"
+PIPELINE_ROOT = f"{BASE_PATH}/{PIPELINE_NAME}"
+PIPELINE_TEMP_ROOT = f"{BASE_PATH}/{PIPELINE_NAME}-temp"
+
+PIPELINE_DISPLAY_NAME = "My Pipeline"
+PIPELINE_DESCRIPTION = "My example pipeline"
+
+NETWORK_NAME = "project network id"
+
+DOCKER_IMAGE = "us-docker.pkg.dev/my-project/my-artifactory/my-pipeline:latest
+BASE_IMAGE = "python:3.11"
+PROJECT_ID = "my-project"
+PROJECT_REGION = "us-central1"
+
+SERVICE_ACCOUNT = "my-service-account@my-project.iam.gserviceaccount.com"
+SCHEDULE_NAME = "My Pipeline"
+```
+
+For testing it on a local machine, make sure to authorize to GCP first
+```shell
+
+gcloud auth application-default login
+
+```
+
+Finally, run the pipeline (it will execute once)
+```shell
+
+python deploy.py --run-type single-run
+```
+
+Or, create a scheduler to run continuously
+```shell
+
+python deploy.py --run-type scheduled
+```
