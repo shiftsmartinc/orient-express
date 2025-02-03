@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "orient_express"
-version = "0.3.4"
+version = "0.4.1"
 description = "A library to simplify model deployment to Vertex AI"
 authors = ["Alexey Zankevich <alex.zankevich@shiftsmart.com>"]
 readme = "README.md"
@@ -10,7 +10,6 @@ python = ">=3.9,<3.13"
 google-cloud-aiplatform = "*"
 google-cloud-storage = "*"
 pandas = "*"
-jupyter = "^1.1.1"
 
 [tool.poetry.dev-dependencies]
 black = "24.10.0"
