@@ -36,7 +36,7 @@ class ModelExpress:
         self,
         model_name: str,
         project_name: str,
-        bucket_name: str,
+        bucket_name: str = None,
         model_version: Optional[int] = None,
         model: object = None,
         region: str = "us-central1",
