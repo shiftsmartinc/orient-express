@@ -3,7 +3,7 @@ import pandas as pd
 import joblib
 import os
 from unittest.mock import patch, MagicMock
-from orient_express import ModelExpress
+from orient_express import ModelExpress, JoblibSimpleLoader
 
 
 @pytest.fixture
@@ -21,7 +21,6 @@ def model_express_instance(sample_model):
         project_name="test_project",
         bucket_name="test_bucket",
         model=sample_model,
-        serialized_model_path="test_model.joblib",
     )
 
 
@@ -64,3 +63,32 @@ def test_get_artifacts_path_with_parametrize(
 ):
     path = model_express_instance.get_artifacts_path(version, file_name=filename)
     assert path == expected_path
+
+
+@pytest.fixture
+def simple_dict_model():
+    """Sample model fixture."""
+    return {"key": "value"}  # Using a dictionary as a simple model representation.
+
+
+@pytest.fixture
+def joblib_loader(tmp_path, simple_dict_model):
+    """Fixture to create a JoblibSimpleLoader instance with a temporary file path."""
+    model_path = tmp_path / "model.joblib"
+    return JoblibSimpleLoader(
+        model=simple_dict_model, serialized_model_path=str(model_path)
+    )
+
+
+def test_joblib_dump(joblib_loader):
+    """Test if JoblibSimpleLoader correctly dumps a model."""
+    file_paths = joblib_loader.dump()
+    assert len(file_paths) == 1
+    assert os.path.exists(file_paths[0])
+
+
+def test_joblib_load(joblib_loader):
+    """Test if JoblibSimpleLoader correctly loads a model."""
+    joblib_loader.dump()
+    loaded_model = joblib_loader.load()
+    assert loaded_model == joblib_loader.model
