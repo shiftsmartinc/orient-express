@@ -48,6 +48,7 @@ class ModelExpress:
         machine_type="n1-standard-4",
         min_replica_count: int = 1,
         max_replica_count: int = 1,
+        labels: dict[str, str] = None,
     ):
         self.model = model
         self.model_name = model_name
@@ -73,6 +74,7 @@ class ModelExpress:
             self.endpoint_name = endpoint_name
 
         self._vertex_initialized = False
+        self.labels = labels
 
     def colab_auth(self):
         from google.colab import auth
@@ -147,6 +149,7 @@ class ModelExpress:
             serving_container_health_route=self.serving_container_health_route,
             serving_container_predict_route=self.serving_container_predict_route,
             sync=True,
+            labels=self.labels,
         )
 
         return release
