@@ -8,6 +8,16 @@ from google.cloud import storage
 from google.cloud import aiplatform
 
 
+class BaseLoader: ...
+
+
+class PickleLoader:
+    def __init__(self, serialized_model_path = ):
+        self.serialized_model_path = serialized_model_path
+
+    def load(self) -> pd.DataFrame: ...
+
+
 class ModelExpress:
     def __init__(
         self,
@@ -17,7 +27,7 @@ class ModelExpress:
         model_version: Optional[int] = None,
         model: object = None,
         region: str = "us-central1",
-        serialized_model_path: str = "model.joblib",
+        model_loader: BaseLoader = None,
         serving_container_image_uri: str = "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xgboost-scikit-learn:latest",
         serving_container_predict_route: str = "/v1/models/orient-express-model:predict",
         serving_container_health_route: str = "/v1/models/orient-express-model",
@@ -32,7 +42,10 @@ class ModelExpress:
         self.region = region
         self.project_name = project_name
         self.bucket_name = bucket_name
-        self.serialized_model_path = serialized_model_path
+
+        if model_loader is None:
+            self.model_loader = PickleLoader()
+
         self.serving_container_image_uri = serving_container_image_uri
         self.serving_container_predict_route = serving_container_predict_route
         self.serving_container_health_route = serving_container_health_route
