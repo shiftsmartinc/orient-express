@@ -8,11 +8,13 @@ from google.cloud import storage
 from google.cloud import aiplatform
 
 
-class BaseLoader: ...
+class BaseLoader:
+
+    def list_artifacts(self): ...
 
 
-class PickleLoader:
-    def __init__(self, serialized_model_path = ):
+class JoblibSimpleLoader(BaseLoader):
+    def __init__(self, serialized_model_path="model.joblib"):
         self.serialized_model_path = serialized_model_path
 
     def load(self) -> pd.DataFrame: ...
@@ -44,7 +46,7 @@ class ModelExpress:
         self.bucket_name = bucket_name
 
         if model_loader is None:
-            self.model_loader = PickleLoader()
+            self.model_loader = JoblibSimpleLoader()
 
         self.serving_container_image_uri = serving_container_image_uri
         self.serving_container_predict_route = serving_container_predict_route
