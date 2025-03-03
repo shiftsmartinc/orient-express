@@ -10,14 +10,26 @@ from google.cloud import aiplatform
 
 class BaseLoader:
 
-    def list_artifacts(self): ...
+    def dump(self) -> list[str]: ...
+
+    def load(self) -> object: ...
 
 
 class JoblibSimpleLoader(BaseLoader):
-    def __init__(self, serialized_model_path="model.joblib"):
+    def __init__(self, model=None, serialized_model_path="model.joblib"):
         self.serialized_model_path = serialized_model_path
+        self.artifact_files = [serialized_model_path]
+        self.model = model
 
-    def load(self) -> pd.DataFrame: ...
+    def dump(self) -> list[str]:
+        """
+        Save model locally, and return a list of local files
+        """
+        joblib.dump(self.model, self.serialized_model_path)
+        return self.artifact_files
+
+    def load(self):
+        return joblib.load(self.serialized_model_path)
 
 
 class ModelExpress:
@@ -46,7 +58,7 @@ class ModelExpress:
         self.bucket_name = bucket_name
 
         if model_loader is None:
-            self.model_loader = JoblibSimpleLoader()
+            self.model_loader = JoblibSimpleLoader(model=model)
 
         self.serving_container_image_uri = serving_container_image_uri
         self.serving_container_predict_route = serving_container_predict_route
@@ -91,8 +103,7 @@ class ModelExpress:
 
     # upload model to vertex ai model registry
     def upload(self):
-        joblib.dump(self.model, self.serialized_model_path)
-        logging.info(f"Model saved to {self.serialized_model_path}")
+        file_list = self.model_loader.dump()
 
         # Initialize the GCS client
         client = storage.Client()
@@ -105,11 +116,10 @@ class ModelExpress:
         else:
             new_version = 1
 
-        # Upload the model file
-        blob = bucket.blob(
-            self.get_artifacts_path(new_version, self.serialized_model_path)
-        )
-        blob.upload_from_filename(self.serialized_model_path)
+        for file_name in file_list:
+            # Upload the model file
+            blob = bucket.blob(self.get_artifacts_path(new_version, file_name))
+            blob.upload_from_filename(file_name)
 
         return self.create_model_version(new_version, last_model)
 
@@ -192,20 +202,24 @@ class ModelExpress:
         return predictions.predictions
 
     def local_predict(self, input_df: pd.DataFrame):
-        self._vertex_init()
-
         if not self.model:
+            self._vertex_init()
             self.load_model_from_registry()
 
         return self.model.predict(input_df)
 
     def local_predict_proba(self, input_df: pd.DataFrame):
         if not self.model:
+            self._vertex_init()
             self.load_model_from_registry()
-
         return self.model.predict_proba(input_df)
 
     def load_model_from_registry(self):
+        self.download_artifacts_from_registry()
+
+        self.model = self.model_loader.load()
+
+    def download_artifacts_from_registry(self):
         self._vertex_init()
 
         vertex_model = self.get_latest_vertex_model(self.model_name)
@@ -220,11 +234,9 @@ class ModelExpress:
             raise Exception(f"Model '{self.model_name}' not found in the registry.")
 
         artifact_uri = vertex_model.gca_resource.artifact_uri
-        self.download_artifacts(artifact_uri)
+        self.download_artifacts_from_uri(artifact_uri)
 
-        self.model = joblib.load(self.serialized_model_path)
-
-    def download_artifacts(self, artifact_uri: str):
+    def download_artifacts_from_uri(self, artifact_uri: str):
         storage_client = storage.Client()
         bucket_name, artifact_path = artifact_uri.replace("gs://", "").split("/", 1)
         bucket = storage_client.bucket(bucket_name)
