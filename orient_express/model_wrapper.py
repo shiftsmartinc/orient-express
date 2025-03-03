@@ -18,7 +18,6 @@ class BaseLoader:
 class JoblibSimpleLoader(BaseLoader):
     def __init__(self, model=None, serialized_model_path="model.joblib"):
         self.serialized_model_path = serialized_model_path
-        self.artifact_files = [serialized_model_path]
         self.model = model
 
     def dump(self) -> list[str]:
@@ -26,7 +25,7 @@ class JoblibSimpleLoader(BaseLoader):
         Save model locally, and return a list of local files
         """
         joblib.dump(self.model, self.serialized_model_path)
-        return self.artifact_files
+        return [self.serialized_model_path]
 
     def load(self):
         return joblib.load(self.serialized_model_path)
