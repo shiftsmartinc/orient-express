@@ -102,10 +102,7 @@ class ModelExpress:
         latest_model = sorted(models, key=lambda x: x.update_time, reverse=True)[0]
         return latest_model
 
-    # upload model to vertex ai model registry
-    def upload(self):
-        file_list = self.model_loader.dump()
-
+    def upload_artifacts_to_registry(self, file_list):
         # Initialize the GCS client
         client = storage.Client()
         bucket = client.bucket(self.bucket_name)
@@ -123,6 +120,12 @@ class ModelExpress:
             blob.upload_from_filename(file_name)
 
         return self.create_model_version(new_version, last_model)
+
+    # upload model to vertex ai model registry
+    def upload(self):
+        file_list = self.model_loader.dump()
+
+        self.upload_artifacts_to_registry(file_list)
 
     def get_artifacts_path(self, version: int, file_name: str = None):
         dir_name = f"models/{self.model_name}/{version}"
