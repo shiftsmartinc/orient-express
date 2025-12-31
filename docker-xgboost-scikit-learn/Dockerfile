@@ -9,6 +9,6 @@ ADD poetry.lock .
 ADD pyproject.toml .
 ADD docker-xgboost-scikit-learn/logging.conf .
 
-RUN poetry install --with inference
+RUN poetry install --with xgboost-scikit-learn --no-root
 
 ENTRYPOINT ["poetry", "run", "python3", "run_inference_server.py"]

@@ -1,0 +1,4 @@
+from .instance_segmentation import OnnxSegmentationPredictor
+from .object_detection import OnnxBoundingBoxPredictor
+from .classification import OnnxClassificationPredictor
+from .utils import get_predictor
