@@ -164,3 +164,4 @@ cython_debug/
 .envrc
 .venv
 
+orient_express/artifacts/

@@ -60,17 +60,6 @@ def clean_exif(image):
     return image
 
 
-def image_to_base64(image):
-    bytes_content = image_to_bytes(image)
-    return base64.b64encode(bytes_content).decode("utf-8")
-
-
-def image_to_bytes(image):
-    buffered = BytesIO()
-    image.save(buffered, format="JPEG")
-    return buffered.getvalue()
-
-
 def fix_rotation(image):
     """
     Encode input image to base64, ensure it's rotated without EXIF tags
@@ -83,10 +72,15 @@ def fix_rotation(image):
     return clean_exif(image)
 
 
-def normalize(image, max_size=2048):
-    image = fix_rotation(image)
-    image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-    return image
+def image_to_base64(image):
+    bytes_content = image_to_bytes(image)
+    return base64.b64encode(bytes_content).decode("utf-8")
+
+
+def image_to_bytes(image):
+    buffered = BytesIO()
+    image.save(buffered, format="JPEG")
+    return buffered.getvalue()
 
 
 def pil_to_opencv(image: Image):

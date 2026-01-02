@@ -3,7 +3,7 @@ import tempfile
 
 from google.cloud import storage, aiplatform
 
-from .predictors import get_predictor
+from .predictors import get_predictor, Predictor
 
 
 ARTIFACT_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
@@ -26,7 +26,7 @@ class VertexModel:
         self.region = region
         self.version = version
 
-    def deploy(
+    def deploy_to_endpoint(
         self,
         endpoint_name: str,
         machine_type: str,
@@ -103,23 +103,33 @@ def download_artifacts(dir: str, artifact_uri: str):
     for blob in blobs:
         filename = blob.name.split("/")[-1]
         download_path = os.path.join(dir, filename)
-        blob.downlad_to_filename(download_path)
+        blob.download_to_filename(download_path)
 
 
 def upload_model(
-    model,
+    model: Predictor,
     model_name: str,
     project_name: str,
     region: str,
     bucket_name: str,
-    serving_container_image_uri: str,
-    serving_container_health_route: str,
-    serving_container_predict_route: str,
+    serving_container_image_uri: str = "",
+    serving_container_health_route: str = "",
+    serving_container_predict_route: str = "",
     labels: dict[str, str] | None = {},
 ):
+    if not serving_container_image_uri:
+        serving_container_image_uri = model.get_serving_container_image_uri()
+    if not serving_container_health_route:
+        serving_container_health_route = model.get_serving_container_health_route(
+            model_name
+        )
+    if not serving_container_predict_route:
+        serving_container_predict_route = model.get_serving_container_predict_route(
+            model_name
+        )
     with tempfile.TemporaryDirectory() as temp_dir:
         file_list = model.dump(temp_dir)
-        upload_model_with_files(
+        vertex_model = upload_model_with_files(
             file_list,
             model_name,
             project_name,
@@ -130,6 +140,7 @@ def upload_model(
             serving_container_predict_route,
             labels,
         )
+    return vertex_model
 
 
 def upload_model_with_files(
@@ -177,9 +188,7 @@ def upload_model_with_files(
         serving_container_predict_route=serving_container_predict_route,
         sync=True,
         labels=labels,
-        serving_container_environment_variables=[
-            {"name": "MODEL_NAME", "value": model_name}
-        ],
+        serving_container_environment_variables={"MODEL_NAME": model_name},
     )
 
     return VertexModel(release, model_name, project_name, region, version)

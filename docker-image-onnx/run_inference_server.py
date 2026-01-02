@@ -8,7 +8,7 @@ from kserve import ModelServer, Model
 from orient_express.utils.image_processor import (
     read_image_from_url,
     read_image_from_gs,
-    normalize,
+    fix_rotation,
     image_to_base64,
 )
 from orient_express.utils.retry import retry
@@ -57,7 +57,7 @@ class OnnxImageModel(Model):
             for img_idx, future in enumerate(futures):
                 try:
                     image = future.result()
-                    image = normalize(image)
+                    image = fix_rotation(image)
                     images.append(image)
                     image_idxs.append(img_idx)
                 except Exception as e:
@@ -68,32 +68,37 @@ class OnnxImageModel(Model):
 
         if isinstance(self.model, OnnxClassificationPredictor):
             model_predictions = self.model.predict(images)
+
+            for pred_idx, prediction in enumerate(model_predictions):
+                img_idx = image_idxs[pred_idx]
+                predictions[img_idx] = prediction.to_dict()
+                predictions[img_idx]["status"] = "success"
+
         else:
             confidence = decoded_input.get("confidence", 0.5)
             model_predictions = self.model.predict(images, confidence)
 
-        with ThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(self.get_debug_image, image, prediction)
-                for image, prediction in zip(images, model_predictions)
-            ]
+            with ThreadPoolExecutor() as executor:
+                futures = [
+                    executor.submit(self.get_debug_image, image, prediction)
+                    for image, prediction in zip(images, model_predictions)
+                ]
 
-            for pred_idx, future in enumerate(futures):
-                img_idx = image_idxs[pred_idx]
-                try:
-                    debug_b64 = future.result()
-                    prediction = model_predictions[img_idx]
-                    prediction_dict = [pred.to_dict() for pred in prediction]
-                    predictions[img_idx] = {
-                        "status": "success",
-                        "predictions": prediction_dict,
-                        "debug_image": debug_b64,
-                    }
-                except Exception as e:
-                    logging.exception(
-                        f"[{self.name}] failed to get debug image {img_idx}: {e}"
-                    )
-                    predictions[img_idx] = {"status": "failed to get debug image"}
+                for pred_idx, future in enumerate(futures):
+                    img_idx = image_idxs[pred_idx]
+                    try:
+                        debug_b64 = future.result()
+                        prediction = model_predictions[pred_idx]
+                        predictions[img_idx] = {
+                            "status": "success",
+                            "predictions": [pred.to_dict() for pred in prediction],
+                            "debug_image": debug_b64,
+                        }
+                    except Exception as e:
+                        logging.exception(
+                            f"[{self.name}] failed to get debug image {img_idx}: {e}"
+                        )
+                        predictions[img_idx] = {"status": "failed to get debug image"}
 
         return {"predictions": predictions}
 
