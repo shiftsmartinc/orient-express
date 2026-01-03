@@ -64,13 +64,12 @@ class VertexModel:
         )
 
     def remote_predict(self, instances: list, endpoint_name: str):
-        if not self.endpoint:
-            endpoint = self.get_endpoint(endpoint_name)
-            if not endpoint:
-                raise Exception(
-                    f"Endpoint '{endpoint_name}' not found. Please deploy the model first."
-                )
-            self.endpoint = endpoint
+        endpoint = self.get_endpoint(endpoint_name)
+        if not endpoint:
+            raise Exception(
+                f"Endpoint '{endpoint_name}' not found. Please deploy the model first."
+            )
+        self.endpoint = endpoint
 
         predictions = self.endpoint.predict(instances=instances)
         return predictions.predictions
