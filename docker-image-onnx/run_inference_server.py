@@ -13,7 +13,7 @@ from orient_express.utils.image_processor import (
 )
 from orient_express.utils.retry import retry
 from orient_express.vertex import download_artifacts, ARTIFACT_DIR
-from orient_express.predictors import get_predictor, OnnxClassificationPredictor
+from orient_express.predictors import get_predictor, ClassificationPredictor
 
 
 class OnnxImageModel(Model):
@@ -66,7 +66,7 @@ class OnnxImageModel(Model):
                     )
                     predictions[img_idx] = {"status": "failed to download image"}
 
-        if isinstance(self.model, OnnxClassificationPredictor):
+        if isinstance(self.model, ClassificationPredictor):
             model_predictions = self.model.predict(images)
 
             for pred_idx, prediction in enumerate(model_predictions):

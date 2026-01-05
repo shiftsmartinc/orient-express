@@ -1,0 +1,7 @@
+orient_express/artifacts
+**/*.onnx
+**/*.pth
+**/*.pt
+**/__pycache__
+.git
+.venv

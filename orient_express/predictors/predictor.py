@@ -29,7 +29,7 @@ class Predictor(ABC):
         pass
 
 
-class OnnxImagePredictor(Predictor):
+class ImagePredictor(Predictor):
     model_type: str
     backend_model: type
     prediction_type: type

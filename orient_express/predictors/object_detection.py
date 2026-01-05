@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass
 
 import cv2
@@ -6,11 +5,9 @@ import numpy as np
 from PIL import Image
 import torch
 from torchvision.ops import nms
-import yaml
 
-from .predictor import OnnxSessionWrapper, OnnxImagePredictor
+from .predictor import OnnxSessionWrapper, ImagePredictor
 from ..utils.image_processor import pil_to_opencv, opencv_to_pil
-from ..utils.paths import get_metadata_path
 
 
 @dataclass
@@ -33,7 +30,7 @@ class BoundingBoxPrediction:
 
 
 class OnnxDetector(OnnxSessionWrapper):
-    def preprocess(self, pil_images: list[Image]):
+    def preprocess(self, pil_images: list[Image.Image]):
         sizes = [[pil_img.size[1], pil_img.size[0]] for pil_img in pil_images]
         images = [
             cv2.resize(np.array(pil_img), (self.resolution, self.resolution))
@@ -70,7 +67,7 @@ class OnnxDetector(OnnxSessionWrapper):
 
         return results
 
-    def __call__(self, pil_images: list[Image], confidence: float = 0.5):
+    def __call__(self, pil_images: list[Image.Image], confidence: float = 0.5):
         images_array, target_sizes_array = self.preprocess(pil_images)
 
         input_dict = {
@@ -82,12 +79,12 @@ class OnnxDetector(OnnxSessionWrapper):
         return self.postprocess(boxes, scores, labels, confidence)
 
 
-class OnnxBoundingBoxPredictor(OnnxImagePredictor):
+class BoundingBoxPredictor(ImagePredictor):
     model_type = "object-detection-onnx"
     backend_model = OnnxDetector
 
     def predict(
-        self, images: list[Image], confidence: float, nms_threshold: float | None = None
+        self, images: list[Image.Image], confidence: float, nms_threshold: float | None = None
     ) -> list[list[BoundingBoxPrediction]]:
         raw_outputs = self.model(images, confidence)
         if nms_threshold is not None:
@@ -122,7 +119,7 @@ class OnnxBoundingBoxPredictor(OnnxImagePredictor):
         return outputs
 
     def get_annotated_image(
-        self, image: Image, predictions: list[BoundingBoxPrediction]
+        self, image: Image.Image, predictions: list[BoundingBoxPrediction]
     ):
         opencv_image = pil_to_opencv(image)
 
@@ -133,15 +130,3 @@ class OnnxBoundingBoxPredictor(OnnxImagePredictor):
             opencv_image = cv2.rectangle(opencv_image, (x1, y1), (x2, y2), color, 2)
 
         return opencv_to_pil(opencv_image)
-
-    def dump(self, dir: str):
-        metadata = {
-            "model_type": self.model_type,
-            "classes": self.classes,
-            "model_file": os.path.basename(self.model_path),
-        }
-        metadata_path = get_metadata_path(dir)
-        with open(metadata_path, "w") as f:
-            yaml.dump(metadata, f)
-        # model is already saved in the model_path
-        return [metadata_path, self.model_path]

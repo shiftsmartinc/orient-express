@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass
 from collections import defaultdict
 
@@ -7,11 +6,9 @@ import numpy as np
 from PIL import Image
 import torch
 import torch.nn.functional as F
-import yaml
 
-from .predictor import OnnxSessionWrapper, OnnxImagePredictor
+from .predictor import OnnxSessionWrapper, ImagePredictor
 from ..utils.image_processor import pil_to_opencv, opencv_to_pil
-from ..utils.paths import get_metadata_path
 
 
 @dataclass
@@ -33,12 +30,12 @@ class InstanceSegmentationPrediction:
             },
         }
         if include_mask:
-            dict_repr["mask"] = self.mask
+            dict_repr["mask"] = self.mask.tolist()
         return dict_repr
 
 
 class OnnxInstanceSegmentation(OnnxSessionWrapper):
-    def preprocess(self, pil_images: list[Image]):
+    def preprocess(self, pil_images: list[Image.Image]):
         sizes = [[pil_img.size[1], pil_img.size[0]] for pil_img in pil_images]
         images = [
             cv2.resize(np.array(pil_img), (self.resolution, self.resolution))
@@ -95,7 +92,7 @@ class OnnxInstanceSegmentation(OnnxSessionWrapper):
 
         return results
 
-    def __call__(self, pil_images: list[Image], confidence: float = 0.5):
+    def __call__(self, pil_images: list[Image.Image], confidence: float = 0.5):
         images_array, target_sizes_array = self.preprocess(pil_images)
 
         input_dict = {
@@ -109,12 +106,12 @@ class OnnxInstanceSegmentation(OnnxSessionWrapper):
         )
 
 
-class OnnxSegmentationPredictor(OnnxImagePredictor):
+class InstanceSegmentationPredictor(ImagePredictor):
     model_type = "instance-segmentation-onnx"
     backend_model = OnnxInstanceSegmentation
 
     def predict(
-        self, images: list[Image], confidence: float
+        self, images: list[Image.Image], confidence: float
     ) -> list[list[InstanceSegmentationPrediction]]:
         if not images:
             return []
@@ -138,8 +135,8 @@ class OnnxSegmentationPredictor(OnnxImagePredictor):
         return outputs
 
     def get_annotated_image(
-        self, image: Image, predictions: list[InstanceSegmentationPrediction]
-    ) -> Image:
+        self, image: Image.Image, predictions: list[InstanceSegmentationPrediction]
+    ) -> Image.Image:
         opencv_image = pil_to_opencv(image)
         mask_overlay = opencv_image.copy()
 
@@ -186,15 +183,3 @@ class OnnxSegmentationPredictor(OnnxImagePredictor):
             (255, 255, 255),
             font_thickness,
         )
-
-    def dump(self, dir: str):
-        metadata = {
-            "model_type": self.model_type,
-            "classes": self.classes,
-            "model_file": os.path.basename(self.model_path),
-        }
-        metadata_path = get_metadata_path(dir)
-        with open(metadata_path, "w") as f:
-            yaml.dump(metadata, f)
-        # model is already saved in the model_path
-        return [metadata_path, self.model_path]

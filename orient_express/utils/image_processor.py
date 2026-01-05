@@ -10,7 +10,7 @@ import requests
 from .gs import get_gcs_from_http_url, read_file_bytes
 
 
-def read_image_from_url(http_url, http_as_gsc=False) -> Image:
+def read_image_from_url(http_url, http_as_gsc=False) -> Image.Image:
     # Extract GSC URI from http link and download the file directly.
     # It will increase reliability, as it will use GCP driver to fetch data
     # If URL is not GCS HTTP URL, download it through HTTP
@@ -25,7 +25,7 @@ def read_image_from_url(http_url, http_as_gsc=False) -> Image:
     return image
 
 
-def read_image_from_gs(gs_url) -> Image:
+def read_image_from_gs(gs_url) -> Image.Image:
     bytes_content = read_file_bytes(gs_url)
     image = Image.open(BytesIO(bytes_content))
     return image
@@ -83,7 +83,7 @@ def image_to_bytes(image):
     return buffered.getvalue()
 
 
-def pil_to_opencv(image: Image):
+def pil_to_opencv(image: Image.Image):
     return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
 
 

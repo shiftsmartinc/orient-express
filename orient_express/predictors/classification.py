@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from .predictor import OnnxSessionWrapper, OnnxImagePredictor
+from .predictor import OnnxSessionWrapper, ImagePredictor
 
 
 @dataclass
@@ -22,24 +22,26 @@ class ClassificationPrediction:
 
 
 class OnnxClassifier(OnnxSessionWrapper):
-    def __call__(self, pil_images: list[Image]):
+    def __call__(self, pil_images: list[Image.Image]):
         images = [
             cv2.resize(np.array(pil_img), (self.resolution, self.resolution))
             for pil_img in pil_images
         ]
-        images_tensor = np.array(images)
+        images_array = np.array(images)
 
-        input_dict = {self.input_names[0]: images_tensor}
+        input_dict = {self.input_names[0]: images_array}
 
         scores = self.session.run(None, input_dict)
         return scores
 
 
-class OnnxClassificationPredictor(OnnxImagePredictor):
+class ClassificationPredictor(ImagePredictor):
     model_type = "classification-onnx"
     backend_model = OnnxClassifier
 
-    def predict(self, images: list[Image]) -> list[ClassificationPrediction]:
+    def predict(self, images: list[Image.Image]) -> list[ClassificationPrediction]:
+        if not images:
+            return []
         raw_outputs = self.model(images)
         outputs = []
         for class_scores in raw_outputs:
@@ -57,5 +59,5 @@ class OnnxClassificationPredictor(OnnxImagePredictor):
             )
         return outputs
 
-    def get_annotated_image(self, image: Image, predictions: ClassificationPrediction):
+    def get_annotated_image(self, image: Image.Image, predictions: ClassificationPrediction):
         return None

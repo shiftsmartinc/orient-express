@@ -8,11 +8,15 @@ from ..utils.paths import get_metadata_path
 
 from .predictor import Predictor, OnnxImagePredictor
 from .instance_segmentation import (
-    OnnxSegmentationPredictor,
+    InstanceSegmentationPredictor,
     InstanceSegmentationPrediction,
 )
-from .object_detection import OnnxBoundingBoxPredictor, BoundingBoxPrediction
-from .classification import OnnxClassificationPredictor, ClassificationPrediction
+from .object_detection import BoundingBoxPredictor, BoundingBoxPrediction
+from .semantic_segmentation import (
+    SemanticSegmentationPredictor,
+    SemanticSegmentationPrediction,
+)
+from .classification import ClassificationPredictor, ClassificationPrediction
 
 
 def get_predictor(dir: str):
@@ -36,17 +40,21 @@ def get_predictor(dir: str):
         if model_type == "joblib":
             joblib_path = os.path.join(dir, metadata["model_file"])
             return joblib.load(joblib_path)
-        elif model_type == OnnxSegmentationPredictor.model_type:
+        elif model_type == InstanceSegmentationPredictor.model_type:
             onnx_path = os.path.join(dir, metadata["model_file"])
             classes = metadata["classes"]
-            return OnnxSegmentationPredictor(onnx_path, classes)
-        elif model_type == OnnxBoundingBoxPredictor.model_type:
+            return InstanceSegmentationPredictor(onnx_path, classes)
+        elif model_type == BoundingBoxPredictor.model_type:
             onnx_path = os.path.join(dir, metadata["model_file"])
             classes = metadata["classes"]
-            return OnnxBoundingBoxPredictor(onnx_path, classes)
-        elif model_type == OnnxClassificationPredictor.model_type:
+            return BoundingBoxPredictor(onnx_path, classes)
+        elif model_type == SemanticSegmentationPredictor.model_type:
             onnx_path = os.path.join(dir, metadata["model_file"])
             classes = metadata["classes"]
-            return OnnxClassificationPredictor(onnx_path, classes)
+            return SemanticSegmentationPredictor(onnx_path, classes)
+        elif model_type == ClassificationPredictor.model_type:
+            onnx_path = os.path.join(dir, metadata["model_file"])
+            classes = metadata["classes"]
+            return ClassificationPredictor(onnx_path, classes)
         else:
             raise Exception(f"Unknown model_type '{model_type}'")
