@@ -13,7 +13,11 @@ from orient_express.utils.image_processor import (
 )
 from orient_express.utils.retry import retry
 from orient_express.vertex import download_artifacts, ARTIFACT_DIR
-from orient_express.predictors import get_predictor, ClassificationPredictor
+from orient_express.predictors import (
+    get_predictor,
+    ClassificationPredictor,
+    SemanticSegmentationPredictor,
+)
 
 
 class OnnxImageModel(Model):
@@ -40,6 +44,7 @@ class OnnxImageModel(Model):
         try:
             decoded_input = self.decode_input(inputs)
             instances = decoded_input["instances"]
+            parameters = decoded_input.get("parameters", {})
         except Exception as e:
             logging.exception(f"[{self.name}] failed to decode input: {e}\n{inputs}")
             return {"error": "Failed to decode input"}
@@ -75,8 +80,11 @@ class OnnxImageModel(Model):
                 predictions[img_idx]["status"] = "success"
 
         else:
-            confidence = decoded_input.get("confidence", 0.5)
-            model_predictions = self.model.predict(images, confidence)
+            if isinstance(self.model, SemanticSegmentationPredictor):
+                model_predictions = self.model.predict(images)
+            else:
+                confidence = parameters.get("confidence", 0.5)
+                model_predictions = self.model.predict(images, confidence)
 
             with ThreadPoolExecutor() as executor:
                 futures = [
@@ -89,9 +97,14 @@ class OnnxImageModel(Model):
                     try:
                         debug_b64 = future.result()
                         prediction = model_predictions[pred_idx]
+                        if isinstance(prediction, list):
+                            predictions_json = [pred.to_dict() for pred in prediction]
+                        else:
+                            predictions_json = prediction.to_dict()
+
                         predictions[img_idx] = {
                             "status": "success",
-                            "predictions": [pred.to_dict() for pred in prediction],
+                            "predictions": predictions_json,
                             "debug_image": debug_b64,
                         }
                     except Exception as e:
