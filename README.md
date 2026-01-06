@@ -3,6 +3,195 @@ A library to accelerate model deployments to Vertex AI directly from colab noteb
 
 ![train-resized](https://github.com/user-attachments/assets/f1ed32ec-07d9-4d48-8b96-3323db6b5091)
 
+Orient Express is a library designed to streamline the deployment of ONNX-based Computer Vision models to Vertex AI. It standardizes the wrapping of models into Predictors, handles interaction with the Vertex Model Registry, and simplifies both local and remote inference workflows.
+
+## Installation
+
+```bash
+pip install orient_express
+```
+
+## Supported Model Types
+
+The library currently supports the following computer vision tasks. Each corresponds to a specific `Predictor` class in the library:
+
+* **Classification** (`ClassificationPredictor`)
+* **Object Detection** (`BoundingBoxPredictor`)
+* **Instance Segmentation** (`InstanceSegmentationPredictor`)
+* **Semantic Segmentation** (`SemanticSegmentationPredictor`)
+
+## ONNX Graph Requirements
+
+To ensure compatibility with `orient_express`, your exported ONNX graphs must adhere to strict input/output signatures and internal processing rules.
+
+### General Preprocessing Rules
+* **Normalization**: The library **does not** perform normalization (e.g., mean subtraction, std division) in Python. Your ONNX graph must accept raw pixel values (0-255) and handle normalization internally (e.g., Cast to Float -> Divide by 255 -> Normalize).
+* **Resizing**: The library resizes input images to the model's expected `resolution` using a **stretch** resize (not letterbox/pad). The input tensor provided to the graph will be `(Batch, Resolution, Resolution, 3)`. If your model requires `NCHW`, the graph must handle the transpose.
+
+### 1. Classification
+* **Inputs**:
+    * `images`: `(B, H, W, 3)` | **Dtype**: `uint8`
+* **Outputs**:
+    * `scores`: Class scores/logits.
+
+### 2. Object Detection
+* **Inputs**:
+    * `images`: `(B, H, W, 3)` | **Dtype**: `uint8`
+    * `target_sizes`: `(B, 2)` containing original image `(height, width)` | **Dtype**: `float32`
+* **Outputs**:
+    * `boxes`: `(B, N, 4)` coordinates `[x1, y1, x2, y2]`. **Crucial**: The graph must rescale these boxes to the original dimensions provided in `target_sizes`.
+    * `scores`: `(B, N)`
+    * `labels`: `(B, N)` Class indices.
+
+### 3. Instance Segmentation
+* **Inputs**:
+    * `images`: `(B, H, W, 3)` | **Dtype**: `uint8`
+    * `target_sizes`: `(B, 2)` containing original image `(height, width)` | **Dtype**: `float32`
+* **Outputs**:
+    * `boxes`: `(B, N, 4)`. **Crucial**: Must be rescaled to original dimensions inside the graph.
+    * `scores`: `(B, N)`
+    * `labels`: `(B, N)`
+    * `masks`: `(B, N, H_mask, W_mask)`. Raw mask outputs. The library handles resizing these masks to the original image size during post-processing.
+
+### 4. Semantic Segmentation
+* **Inputs**:
+    * `images`: `(B, H, W, 3)` | **Dtype**: `uint8`
+    * *Note: Does not accept `target_sizes`.*
+* **Outputs**:
+    * `masks`: `(1, Num_Classes, H_mask, W_mask)` or similar. The library handles resizing the output masks to match the input image size in post-processing.
+
+---
+
+## Workflow 1: Export & Upload Model
+
+This is the primary entry point. You must instantiate a local predictor with your ONNX model and upload it to the Vertex AI Model Registry.
+
+```python
+from orient_express.predictors import InstanceSegmentationPredictor
+from orient_express.vertex import upload_model
+
+# 1. Define your class mapping (ID -> Name)
+classes = {
+    1: "person",
+    2: "bicycle",
+    3: "car"
+}
+
+# 2. Instantiate the local predictor
+# This wraps your ONNX file and handles standardized post-processing
+local_predictor = InstanceSegmentationPredictor(
+    model_path="path/to/my_model.onnx", 
+    classes=classes
+)
+
+# 3. Upload to Vertex AI Model Registry
+# This dumps the necessary metadata and artifacts and registers the model
+vertex_model = upload_model(
+    model=local_predictor,
+    model_name="traffic-segmentation",
+    project_name="my-gcp-project",
+    region="us-central1",
+    bucket_name="my-artifact-bucket"
+)
+
+print(f"Model uploaded: {vertex_model.name} version {vertex_model.version}")
+```
+
+## Workflow 2: Local Inference
+
+> **Prerequisite:** This workflow **only** works for models that have already been uploaded to the registry via [Workflow 1](#workflow-1-export--upload-model).
+
+You can pull a model from the registry to run inference on your local machine without deploying a remote endpoint.
+
+```python
+from orient_express.vertex import get_vertex_model
+from PIL import Image
+
+# 1. Fetch the model reference from Vertex Registry
+vertex_model = get_vertex_model(
+    model_name="traffic-segmentation",
+    project_name="my-gcp-project",
+    region="us-central1"
+)
+
+# 2. Download artifacts and instantiate the predictor locally
+predictor = vertex_model.get_local_predictor()
+
+# 3. Run Inference
+image = Image.open("street.jpg")
+predictions = predictor.predict(
+    images=[image], 
+    confidence=0.5
+)
+
+# 4. Visualization (Optional)
+debug_image = predictor.get_annotated_image(image, predictions[0])
+debug_image.show()
+```
+
+## Workflow 3: Remote Inference (Online Endpoint)
+
+> **Prerequisite:** This workflow **only** works for models that have already been uploaded to the registry via [Workflow 1](#workflow-1-export--upload-model).
+
+Deploy the model to a Vertex AI Endpoint and run inference via API calls.
+
+```python
+from orient_express.vertex import get_vertex_model
+
+# 1. Get the model
+vertex_model = get_vertex_model(
+    model_name="traffic-segmentation",
+    project_name="my-gcp-project",
+    region="us-central1"
+)
+
+# 2. Deploy to an Endpoint
+# This creates a Vertex Endpoint and deploys the model container
+vertex_model.deploy_to_endpoint(
+    endpoint_name="traffic-seg-endpoint",
+    machine_type="n1-standard-4",
+    min_replica_count=1,
+    max_replica_count=2
+)
+
+# 3. Remote Prediction
+# Orient Express handles image encoding/decoding automatically
+instances = [
+    {"image": "gs://my-bucket/street.jpg"}, # GCS URI
+    {"image": "http://example.com/car.jpg"} # HTTP URL
+]
+
+results = vertex_model.remote_predict(
+    instances=instances,
+    endpoint_name="traffic-seg-endpoint"
+)
+
+print(results)
+```
+
+## Prediction Return Types
+
+The `predict()` methods return standardized dataclasses depending on the predictor type.
+
+### `ClassificationPrediction`
+* `clss` (str): The name of the highest scoring class.
+* `score` (float): The confidence score of the highest class.
+* `class_scores` (dict[str, float]): Dictionary of all classes and their scores.
+
+### `BoundingBoxPrediction`
+* `clss` (str): Detected class name.
+* `score` (float): Confidence score.
+* `bbox` (np.ndarray): Array `[x1, y1, x2, y2]` (absolute coordinates).
+
+### `InstanceSegmentationPrediction`
+* `clss` (str): Detected class name.
+* `score` (float): Confidence score.
+* `bbox` (np.ndarray): Array `[x1, y1, x2, y2]`.
+* `mask` (np.ndarray): Boolean array representing the segmentation mask (same size as original image).
+
+### `SemanticSegmentationPrediction`
+* `class_mask` (np.ndarray): 2D array where each pixel value corresponds to a class ID.
+* `conf_masks` (np.ndarray): Raw confidence masks.
 ## Installation
 
 ```

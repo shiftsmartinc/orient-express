@@ -45,13 +45,15 @@ class ClassificationPredictor(ImagePredictor):
         raw_outputs = self.model(images)
         outputs = []
         for class_scores in raw_outputs:
-            max_class_idx = class_scores.argmax() + 1
-            max_clss = self.classes.get(max_class_idx, "Unknown")
+            max_class_idx = class_scores.argmax()
+            # self.classes is 1-indexed
+            max_clss = self.classes.get(max_class_idx + 1, "Unknown")
             outputs.append(
                 ClassificationPrediction(
                     clss=max_clss,
                     score=float(class_scores[max_class_idx]),
                     class_scores={
+                        # self.classes is 1-indexed
                         clss: float(class_scores[class_idx - 1])
                         for class_idx, clss in self.classes.items()
                     },
@@ -59,5 +61,7 @@ class ClassificationPredictor(ImagePredictor):
             )
         return outputs
 
-    def get_annotated_image(self, image: Image.Image, predictions: ClassificationPrediction):
+    def get_annotated_image(
+        self, image: Image.Image, predictions: ClassificationPrediction
+    ):
         return None

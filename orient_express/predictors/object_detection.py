@@ -86,6 +86,8 @@ class BoundingBoxPredictor(ImagePredictor):
     def predict(
         self, images: list[Image.Image], confidence: float, nms_threshold: float | None = None
     ) -> list[list[BoundingBoxPrediction]]:
+        if not images:
+            return []
         raw_outputs = self.model(images, confidence)
         if nms_threshold is not None:
             nms_outputs = []

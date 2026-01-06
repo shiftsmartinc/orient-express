@@ -49,7 +49,7 @@ class OnnxSemanticSegmentation(OnnxSessionWrapper):
                 mode="bilinear",
                 align_corners=False,
             )
-            resized_masks = resized_masks_torch.squeeze(1).numpy() > 0.0
+            resized_masks = resized_masks_torch.squeeze(1).numpy()
 
             results.append(resized_masks)
 
@@ -58,7 +58,7 @@ class OnnxSemanticSegmentation(OnnxSessionWrapper):
     def __call__(self, pil_images: list[Image.Image]):
         images_array, target_sizes_array = self.preprocess(pil_images)
         input_dict = {self.input_names[0]: images_array}
-        masks = self.session.run(None, input_dict)
+        masks = self.session.run(None, input_dict)[0]
         return self.postprocess(masks, target_sizes_array)
 
 

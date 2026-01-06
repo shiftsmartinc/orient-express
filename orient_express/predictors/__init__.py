@@ -6,7 +6,7 @@ import yaml
 
 from ..utils.paths import get_metadata_path
 
-from .predictor import Predictor, OnnxImagePredictor
+from .predictor import Predictor, ImagePredictor
 from .instance_segmentation import (
     InstanceSegmentationPredictor,
     InstanceSegmentationPrediction,
