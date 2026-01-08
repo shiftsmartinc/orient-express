@@ -541,9 +541,9 @@ class TestBoundingBoxPredictor:
             original_edge = original_arr[5, 25]
 
             # The edge should have changed (a rectangle was drawn)
-            assert not np.array_equal(edge_pixel, original_edge), (
-                "Edge pixel should have changed"
-            )
+            assert not np.array_equal(
+                edge_pixel, original_edge
+            ), "Edge pixel should have changed"
 
             # Pixels well inside the box should be unchanged (white)
             interior_pixel = annotated_arr[25, 25]
@@ -740,9 +740,9 @@ class TestInstanceSegmentationPredictor:
             original_pixel = original_arr[10, 10]
 
             # The masked pixel should be different from original (blending occurred)
-            assert not np.array_equal(masked_pixel, original_pixel), (
-                "Masked pixel should be blended"
-            )
+            assert not np.array_equal(
+                masked_pixel, original_pixel
+            ), "Masked pixel should be blended"
 
             # Pixel outside mask region (bottom-right) - should be unchanged
             outside_pixel = annotated_arr[75, 75]

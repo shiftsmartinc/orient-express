@@ -84,7 +84,10 @@ class BoundingBoxPredictor(ImagePredictor):
     backend_model = OnnxDetector
 
     def predict(
-        self, images: list[Image.Image], confidence: float, nms_threshold: float | None = None
+        self,
+        images: list[Image.Image],
+        confidence: float,
+        nms_threshold: float | None = None,
     ) -> list[list[BoundingBoxPrediction]]:
         if not images:
             return []
