@@ -10,11 +10,11 @@ import requests
 from .gs import get_gcs_from_http_url, read_file_bytes
 
 
-def read_image_from_url(http_url, http_as_gsc=False) -> Image.Image:
+def read_image_from_url(http_url, http_as_gcs=False) -> Image.Image:
     # Extract GSC URI from http link and download the file directly.
     # It will increase reliability, as it will use GCP driver to fetch data
     # If URL is not GCS HTTP URL, download it through HTTP
-    if http_as_gsc:
+    if http_as_gcs:
         gs_uri = get_gcs_from_http_url(http_url)
         if gs_uri:
             return read_image_from_gs(gs_uri)
@@ -61,9 +61,6 @@ def clean_exif(image):
 
 
 def fix_rotation(image):
-    """
-    Encode input image to base64, ensure it's rotated without EXIF tags
-    """
     orientation = get_orientation(image)
     if orientation:
         logging.info(f"Rotating image for orientation {orientation}")
