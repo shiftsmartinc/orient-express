@@ -116,7 +116,7 @@ def upload_model(
     serving_container_image_uri: str = "",
     serving_container_health_route: str = "",
     serving_container_predict_route: str = "",
-    labels: dict[str, str] | None = {},
+    labels: dict[str, str] | None = None,
 ):
     """
     Upload a Predictor model to Vertex AI Model Registry.
@@ -170,7 +170,7 @@ def upload_model_joblib(
     serving_container_image_uri: str,
     serving_container_health_route: str,
     serving_container_predict_route: str,
-    labels: dict[str, str] | None = {},
+    labels: dict[str, str] | None = None,
 ):
     """
     Upload a joblib-serializable model to Vertex AI Model Registry.
@@ -231,7 +231,7 @@ def upload_model_with_files(
     serving_container_image_uri: str,
     serving_container_health_route: str,
     serving_container_predict_route: str,
-    labels: dict[str, str] | None = {},
+    labels: dict[str, str] | None = None,
 ) -> VertexModel:
     parent_model = get_vertex_model(
         model_name, project_name, region, raise_exception=False
@@ -246,7 +246,8 @@ def upload_model_with_files(
 
     artifact_dir = f"models/{model_name}/{version}/"
     for file_name in file_list:
-        blob = bucket.blob(f"{artifact_dir}{file_name}")
+        basename = os.path.basename(file_name)
+        blob = bucket.blob(f"{artifact_dir}{basename}")
         blob.upload_from_filename(file_name)
 
     artifact_uri = f"gs://{bucket_name}/{artifact_dir}"
@@ -257,6 +258,9 @@ def upload_model_with_files(
         )
     else:
         parent_model_uri = None
+
+    if labels is None:
+        labels = {}
 
     release = aiplatform.Model.upload(
         display_name=model_name,

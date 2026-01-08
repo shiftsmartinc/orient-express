@@ -37,24 +37,26 @@ def get_predictor(dir: str):
         model_type = metadata.get("model_type")
         if model_type is None:
             raise Exception("No model_type defined in metadata.yaml")
+        if "model_file" not in metadata:
+            raise Exception("No model_file defined in metadata.yaml")
         if model_type == "joblib":
             joblib_path = os.path.join(dir, metadata["model_file"])
             return joblib.load(joblib_path)
         elif model_type == InstanceSegmentationPredictor.model_type:
-            onnx_path = os.path.join(dir, metadata["model_file"])
-            classes = metadata["classes"]
-            return InstanceSegmentationPredictor(onnx_path, classes)
+            return load_image_predictor(InstanceSegmentationPredictor, dir, metadata)
         elif model_type == BoundingBoxPredictor.model_type:
-            onnx_path = os.path.join(dir, metadata["model_file"])
-            classes = metadata["classes"]
-            return BoundingBoxPredictor(onnx_path, classes)
+            return load_image_predictor(BoundingBoxPredictor, dir, metadata)
         elif model_type == SemanticSegmentationPredictor.model_type:
-            onnx_path = os.path.join(dir, metadata["model_file"])
-            classes = metadata["classes"]
-            return SemanticSegmentationPredictor(onnx_path, classes)
+            return load_image_predictor(SemanticSegmentationPredictor, dir, metadata)
         elif model_type == ClassificationPredictor.model_type:
-            onnx_path = os.path.join(dir, metadata["model_file"])
-            classes = metadata["classes"]
-            return ClassificationPredictor(onnx_path, classes)
+            return load_image_predictor(ClassificationPredictor, dir, metadata)
         else:
             raise Exception(f"Unknown model_type '{model_type}'")
+
+
+def load_image_predictor(model_type: type[ImagePredictor], dir: str, metadata: dict):
+    onnx_path = os.path.join(dir, metadata["model_file"])
+    if "classes" not in metadata:
+        raise Exception("No classes defined in metadata.yaml")
+    classes = metadata["classes"]
+    return model_type(onnx_path, classes)

@@ -1,3 +1,4 @@
+import functools
 import logging
 import time
 
@@ -24,6 +25,7 @@ def retry(
     def decorator(old_func):
         retry_conf = RetryConfig(retries, initial_timeout, max_timeout)
 
+        @functools.wraps(old_func)
         def new_func(*args, **kwargs):
             timeout = retry_conf.initial_timeout
             for i in range(retry_conf.retries):

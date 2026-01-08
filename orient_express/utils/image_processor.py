@@ -79,6 +79,8 @@ def image_to_base64(image):
 
 def image_to_bytes(image):
     buffered = BytesIO()
+    if image.mode == "RGBA":
+        image = image.convert("RGB")
     image.save(buffered, format="JPEG")
     return buffered.getvalue()
 
