@@ -139,9 +139,6 @@ predictions = local_predictor.predict(X_test)
 
 ### Pinning Model Versions
 
-<details>
-<summary>Click to expand</summary>
-
 By default, `get_vertex_model` returns the most recently updated version. To pin to a specific version:
 
 ```python
@@ -152,8 +149,6 @@ vertex_model = get_vertex_model(
     version=3,  # Pin to version 3
 )
 ```
-
-</details>
 
 ---
 
@@ -168,8 +163,6 @@ All ONNX image models share these requirements:
 - **Input images are resized using simple stretch** (no letterboxing/padding) to the model's expected resolution before inference.
 - **Normalization must be baked into the ONNX graph.** The library passes uint8 RGB images directly to the model; any normalization (e.g., ImageNet mean/std) must be handled inside the graph.
 - **Batch dimension**: Models receive batched inputs with shape `[batch, height, width, 3]`.
-
----
 
 ### ClassificationPredictor
 
@@ -220,10 +213,10 @@ class ClassificationPrediction:
 
 </details>
 
+### BoundingBoxPredictor
+
 <details>
 <summary>Click to expand</summary>
-
-### BoundingBoxPredictor
 
 For object detection models that output bounding boxes.
 
@@ -280,10 +273,10 @@ annotated_image = predictor.get_annotated_image(image, predictions[0])
 
 </details>
 
+### InstanceSegmentationPredictor
+
 <details>
 <summary>Click to expand</summary>
-
-### InstanceSegmentationPredictor
 
 For instance segmentation models that output bounding boxes and per-instance masks.
 
@@ -347,10 +340,10 @@ annotated_image = predictor.get_annotated_image(image, predictions[0])
 
 </details>
 
+### SemanticSegmentationPredictor
+
 <details>
 <summary>Click to expand</summary>
-
-### SemanticSegmentationPredictor
 
 For semantic segmentation models that output per-pixel class predictions.
 
