@@ -21,6 +21,7 @@ import orient_express.vertex as vertex_module
 
 from orient_express.vertex import (
     upload_model,
+    upload_model_joblib,
     download_artifacts,
     get_vertex_model,
     vertex_init,
@@ -899,3 +900,184 @@ class TestUploadModel:
             assert upload_call.kwargs["serving_container_environment_variables"] == {
                 "MODEL_NAME": "my-detector"
             }
+
+
+class TestUploadModelJoblib:
+    """Tests for the upload_model_joblib function."""
+
+    def test_serializes_model_with_joblib(self, mock_storage_client):
+        """upload_model_joblib saves model using joblib."""
+        mock_client, mock_bucket = mock_storage_client
+        mock_bucket.blob.return_value = MagicMock()
+
+        # Create a simple model that can be serialized
+        from sklearn.linear_model import LogisticRegression
+
+        model = LogisticRegression()
+
+        with (
+            patch("orient_express.vertex.storage.Client", return_value=mock_client),
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+            patch("orient_express.vertex.joblib.dump") as mock_joblib_dump,
+        ):
+            mock_model_class.list.return_value = []
+            mock_model_class.upload.return_value = MagicMock(name="new", version_id="1")
+
+            upload_model_joblib(
+                model=model,
+                model_name="test-joblib",
+                project_name="test-project",
+                region="us-central1",
+                bucket_name="test-bucket",
+                serving_container_image_uri="custom-image:v1",
+                serving_container_health_route="/health",
+                serving_container_predict_route="/predict",
+            )
+
+            # Verify joblib.dump was called with the model
+            mock_joblib_dump.assert_called_once()
+            assert mock_joblib_dump.call_args[0][0] is model
+
+    def test_creates_metadata_with_joblib_type(self, mock_storage_client):
+        """upload_model_joblib creates metadata.yaml with model_type 'joblib'."""
+        mock_client, mock_bucket = mock_storage_client
+        mock_blob = MagicMock()
+        mock_bucket.blob.return_value = mock_blob
+
+        from sklearn.linear_model import LogisticRegression
+
+        model = LogisticRegression()
+
+        with (
+            patch("orient_express.vertex.storage.Client", return_value=mock_client),
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+        ):
+            mock_model_class.list.return_value = []
+            mock_model_class.upload.return_value = MagicMock(name="new", version_id="1")
+
+            upload_model_joblib(
+                model=model,
+                model_name="test-joblib",
+                project_name="test-project",
+                region="us-central1",
+                bucket_name="test-bucket",
+                serving_container_image_uri="custom-image:v1",
+                serving_container_health_route="/health",
+                serving_container_predict_route="/predict",
+            )
+
+            # Verify blob paths include metadata.yaml and model.joblib
+            blob_calls = mock_bucket.blob.call_args_list
+            blob_paths = [call[0][0] for call in blob_calls]
+
+            assert any("metadata.yaml" in path for path in blob_paths)
+            assert any("model.joblib" in path for path in blob_paths)
+
+    def test_passes_container_routes_to_upload(self, mock_storage_client):
+        """upload_model_joblib passes container routes to Model.upload."""
+        mock_client, mock_bucket = mock_storage_client
+        mock_bucket.blob.return_value = MagicMock()
+
+        from sklearn.linear_model import LogisticRegression
+
+        model = LogisticRegression()
+
+        with (
+            patch("orient_express.vertex.storage.Client", return_value=mock_client),
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+        ):
+            mock_model_class.list.return_value = []
+            mock_model_class.upload.return_value = MagicMock(name="new", version_id="1")
+
+            upload_model_joblib(
+                model=model,
+                model_name="test-joblib",
+                project_name="test-project",
+                region="us-central1",
+                bucket_name="test-bucket",
+                serving_container_image_uri="my-container:v2",
+                serving_container_health_route="/custom/health",
+                serving_container_predict_route="/custom/predict",
+            )
+
+            upload_call = mock_model_class.upload.call_args
+            assert (
+                upload_call.kwargs["serving_container_image_uri"] == "my-container:v2"
+            )
+            assert (
+                upload_call.kwargs["serving_container_health_route"] == "/custom/health"
+            )
+            assert (
+                upload_call.kwargs["serving_container_predict_route"]
+                == "/custom/predict"
+            )
+
+    def test_passes_labels_to_upload(self, mock_storage_client):
+        """upload_model_joblib passes labels to Model.upload."""
+        mock_client, mock_bucket = mock_storage_client
+        mock_bucket.blob.return_value = MagicMock()
+
+        from sklearn.linear_model import LogisticRegression
+
+        model = LogisticRegression()
+
+        with (
+            patch("orient_express.vertex.storage.Client", return_value=mock_client),
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+        ):
+            mock_model_class.list.return_value = []
+            mock_model_class.upload.return_value = MagicMock(name="new", version_id="1")
+
+            upload_model_joblib(
+                model=model,
+                model_name="test-joblib",
+                project_name="test-project",
+                region="us-central1",
+                bucket_name="test-bucket",
+                serving_container_image_uri="custom-image:v1",
+                serving_container_health_route="/health",
+                serving_container_predict_route="/predict",
+                labels={"env": "staging", "owner": "data-team"},
+            )
+
+            upload_call = mock_model_class.upload.call_args
+            assert upload_call.kwargs["labels"] == {
+                "env": "staging",
+                "owner": "data-team",
+            }
+
+    def test_returns_vertex_model(self, mock_storage_client):
+        """upload_model_joblib returns a VertexModel instance."""
+        mock_client, mock_bucket = mock_storage_client
+        mock_bucket.blob.return_value = MagicMock()
+
+        from sklearn.linear_model import LogisticRegression
+
+        model = LogisticRegression()
+
+        with (
+            patch("orient_express.vertex.storage.Client", return_value=mock_client),
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+        ):
+            mock_model_class.list.return_value = []
+            mock_model_class.upload.return_value = MagicMock(name="new", version_id="1")
+
+            result = upload_model_joblib(
+                model=model,
+                model_name="test-joblib",
+                project_name="test-project",
+                region="us-central1",
+                bucket_name="test-bucket",
+                serving_container_image_uri="custom-image:v1",
+                serving_container_health_route="/health",
+                serving_container_predict_route="/predict",
+            )
+
+            assert isinstance(result, VertexModel)
+            assert result.model_name == "test-joblib"
+            assert result.version == 1

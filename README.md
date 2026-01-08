@@ -1,9 +1,16 @@
 # Orient Express
+
 A library to accelerate model deployments to Vertex AI directly from colab notebooks
 
 ![train-resized](https://github.com/user-attachments/assets/f1ed32ec-07d9-4d48-8b96-3323db6b5091)
 
-Orient Express is a library designed to streamline the deployment of ONNX-based Computer Vision models to Vertex AI. It standardizes the wrapping of models into Predictors, handles interaction with the Vertex Model Registry, and simplifies both local and remote inference workflows.
+Orient Express provides two main capabilities:
+
+1. **Vertex Model Deployment and Retrieval**: Capabilities for uploading, downloading, or deploying models to Vertex AI Model Registry.
+
+1. **ONNX Image Model Deployment**: Built-in predictor classes for easily running image classification, object detection, instance segmentation, and semantic segmentation models exported to ONNX format.
+
+Both workflows handle versioning, artifact storage in GCS, and integration with Vertex AI Model Registry.
 
 ## Installation
 
@@ -11,192 +18,414 @@ Orient Express is a library designed to streamline the deployment of ONNX-based 
 pip install orient_express
 ```
 
-## Supported Model Types
+## Workflows
 
-The library currently supports the following computer vision tasks. Each corresponds to a specific `Predictor` class in the library:
+### ONNX Image Model Workflow
 
-* **Classification** (`ClassificationPredictor`)
-* **Object Detection** (`BoundingBoxPredictor`)
-* **Instance Segmentation** (`InstanceSegmentationPredictor`)
-* **Semantic Segmentation** (`SemanticSegmentationPredictor`)
+This workflow is for deploying image models (classification, detection, segmentation) exported to ONNX format.
 
-## ONNX Graph Requirements
+```python
+from orient_express.predictors import ClassificationPredictor
+from orient_express.vertex import upload_model, get_vertex_model
 
-To ensure compatibility with `orient_express`, your exported ONNX graphs must adhere to strict input/output signatures and internal processing rules.
+# 1. Create predictor from your exported ONNX model
+predictor = ClassificationPredictor(
+    onnx_path="model.onnx",
+    classes={1: "cat", 2: "dog", 3: "bird"}
+)
 
-### General Preprocessing Rules
-* **Normalization**: The library **does not** perform normalization (e.g., mean subtraction, std division) in Python. Your ONNX graph must accept raw pixel values (0-255) and handle normalization internally (e.g., Cast to Float -> Divide by 255 -> Normalize).
-* **Resizing**: The library resizes input images to the model's expected `resolution` using a **stretch** resize (not letterbox/pad). The input tensor provided to the graph will be `(Batch, Resolution, Resolution, 3)`. If your model requires `NCHW`, the graph must handle the transpose.
+# 2. Upload to Vertex AI Model Registry
+vertex_model = upload_model(
+    model=predictor,
+    model_name="my-classifier",
+    project_name="my-project",
+    region="us-central1",
+    bucket_name="my-artifacts-bucket",
+)
 
-### 1. Classification
-* **Inputs**:
-    * `images`: `(B, H, W, 3)` | **Dtype**: `uint8`
-* **Outputs**:
-    * `scores`: Class scores/logits.
+# 3. Later, retrieve and run locally
+vertex_model = get_vertex_model(
+    model_name="my-classifier",
+    project_name="my-project",
+    region="us-central1",
+)
+local_predictor = vertex_model.get_local_predictor()
 
-### 2. Object Detection
-* **Inputs**:
-    * `images`: `(B, H, W, 3)` | **Dtype**: `uint8`
-    * `target_sizes`: `(B, 2)` containing original image `(height, width)` | **Dtype**: `float32`
-* **Outputs**:
-    * `boxes`: `(B, N, 4)` coordinates `[x1, y1, x2, y2]`. **Crucial**: The graph must rescale these boxes to the original dimensions provided in `target_sizes`.
-    * `scores`: `(B, N)`
-    * `labels`: `(B, N)` Class indices.
+from PIL import Image
+images = [Image.open("test.jpg")]
+predictions = local_predictor.predict(images)
 
-### 3. Instance Segmentation
-* **Inputs**:
-    * `images`: `(B, H, W, 3)` | **Dtype**: `uint8`
-    * `target_sizes`: `(B, 2)` containing original image `(height, width)` | **Dtype**: `float32`
-* **Outputs**:
-    * `boxes`: `(B, N, 4)`. **Crucial**: Must be rescaled to original dimensions inside the graph.
-    * `scores`: `(B, N)`
-    * `labels`: `(B, N)`
-    * `masks`: `(B, N, H_mask, W_mask)`. Raw mask outputs. The library handles resizing these masks to the original image size during post-processing.
+# 4. Or deploy to an endpoint for remote inference
+vertex_model.deploy_to_endpoint(
+    endpoint_name="my-classifier-endpoint",
+    machine_type="n1-standard-4",
+    min_replica_count=1,
+    max_replica_count=3,
+)
 
-### 4. Semantic Segmentation
-* **Inputs**:
-    * `images`: `(B, H, W, 3)` | **Dtype**: `uint8`
-    * *Note: Does not accept `target_sizes`.*
-* **Outputs**:
-    * `masks`: `(1, Num_Classes, H_mask, W_mask)` or similar. The library handles resizing the output masks to match the input image size in post-processing.
+# remote prediction API depends on the endpoint container deployed with the model
+predictions = vertex_model.remote_predict(
+    [{"image": "https://storage.googleapis.com/ssm-media-uploads/example.jpg"}], 
+    endpoint_name="my-classifier-endpoint"
+)
+```
+
+### Joblib Model Workflow
+
+This workflow is for deploying models that can be serialized with joblib, such as scikit-learn pipelines or XGBoost models.
+
+```python
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.impute import SimpleImputer
+import xgboost as xgb
+import seaborn as sns
+
+from orient_express.vertex import upload_model_joblib, get_vertex_model
+
+# 1. Train your model
+data = sns.load_dataset('titanic').dropna(subset=['survived'])
+X = data[['pclass', 'sex', 'age', 'sibsp', 'parch', 'fare', 'embarked']]
+y = data['survived']
+
+numeric_features = ['age', 'fare', 'sibsp', 'parch']
+numeric_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='median')),
+    ('scaler', StandardScaler())
+])
+
+categorical_features = ['pclass', 'sex', 'embarked']
+categorical_transformer = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+
+preprocessor = ColumnTransformer(transformers=[
+    ('num', numeric_transformer, numeric_features),
+    ('cat', categorical_transformer, categorical_features)
+])
+
+model = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss'))
+])
+
+model.fit(X, y)
+
+# 2. Upload to Vertex AI Model Registry
+vertex_model = upload_model_joblib(
+    model=model,
+    model_name="titanic-classifier",
+    project_name="my-project",
+    region="us-central1",
+    bucket_name="my-artifacts-bucket",
+    serving_container_image_uri="your-serving-container:latest",
+    serving_container_health_route="/health",
+    serving_container_predict_route="/predict",
+)
+
+# 3. Later, retrieve the model
+vertex_model = get_vertex_model(
+    model_name="titanic-classifier",
+    project_name="my-project",
+    region="us-central1",
+)
+
+# 4. Run locally
+local_predictor = vertex_model.get_local_predictor()
+predictions = local_predictor.predict(X_test)
+```
+
+### Pinning Model Versions
+
+<details>
+<summary>Click to expand</summary>
+
+By default, `get_vertex_model` returns the most recently updated version. To pin to a specific version:
+
+```python
+vertex_model = get_vertex_model(
+    model_name="my-classifier",
+    project_name="my-project",
+    region="us-central1",
+    version=3,  # Pin to version 3
+)
+```
+
+</details>
 
 ---
 
-## Workflow 1: Export & Upload Model
+## Built-in Predictor Types
 
-This is the primary entry point. You must instantiate a local predictor with your ONNX model and upload it to the Vertex AI Model Registry.
+Orient Express provides four built-in predictor classes for ONNX image models. Each has specific requirements for the ONNX graph structure.
+
+### General ONNX Requirements
+
+All ONNX image models share these requirements:
+
+- **Input images are resized using simple stretch** (no letterboxing/padding) to the model's expected resolution before inference.
+- **Normalization must be baked into the ONNX graph.** The library passes uint8 RGB images directly to the model; any normalization (e.g., ImageNet mean/std) must be handled inside the graph.
+- **Batch dimension**: Models receive batched inputs with shape `[batch, height, width, 3]`.
+
+---
+
+### ClassificationPredictor
+
+<details>
+<summary>Click to expand</summary>
+
+For image classification models that output class probabilities.
+
+#### ONNX Graph Requirements
+
+|             |                                                              |
+| ----------- | ------------------------------------------------------------ |
+| **Inputs**  | `images`: `[batch, height, width, 3]` uint8 RGB              |
+| **Outputs** | `scores`: `[batch, num_classes]` float32 class probabilities |
+
+The graph must handle normalization internally. No target_sizes input is needed.
+
+#### Usage
+
+```python
+from orient_express.predictors import ClassificationPredictor
+
+predictor = ClassificationPredictor(
+    onnx_path="classifier.onnx",
+    classes={1: "cat", 2: "dog", 3: "bird"}
+)
+
+predictions = predictor.predict(images)
+# Returns: list[ClassificationPrediction]
+```
+
+#### Output Structure
+
+```python
+@dataclass
+class ClassificationPrediction:
+    clss: str                      # Predicted class name
+    score: float                   # Confidence score for predicted class
+    class_scores: dict[str, float] # Scores for all classes
+
+# to_dict() output:
+{
+    "class": "cat",
+    "score": 0.95,
+    "class_scores": {"cat": 0.95, "dog": 0.03, "bird": 0.02}
+}
+```
+
+</details>
+
+<details>
+<summary>Click to expand</summary>
+
+### BoundingBoxPredictor
+
+For object detection models that output bounding boxes.
+
+#### ONNX Graph Requirements
+
+|             |                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| **Inputs**  | `images`: `[batch, height, width, 3]` uint8 RGB                                                   |
+|             | `target_sizes`: `[batch, 2]` float32 containing `[height, width]` of original images              |
+| **Outputs** | `boxes`: `[batch, num_detections, 4]` float32 as `[x1, y1, x2, y2]` in original image coordinates |
+|             | `scores`: `[batch, num_detections]` float32 confidence scores                                     |
+|             | `labels`: `[batch, num_detections]` int64 class indices                                           |
+
+The ONNX graph must rescale bounding boxes to the original image dimensions using `target_sizes`. The library does not perform any box coordinate transformation.
+
+#### Usage
+
+```python
+from orient_express.predictors import BoundingBoxPredictor
+
+predictor = BoundingBoxPredictor(
+    onnx_path="detector.onnx",
+    classes={1: "person", 2: "car", 3: "bicycle"}
+)
+
+predictions = predictor.predict(images, confidence=0.5, nms_threshold=0.4)
+# Returns: list[list[BoundingBoxPrediction]]
+# Outer list: per image, inner list: detections for that image
+```
+
+#### Output Structure
+
+```python
+@dataclass
+class BoundingBoxPrediction:
+    clss: str           # Class name
+    score: float        # Confidence score
+    bbox: np.ndarray    # [x1, y1, x2, y2] in original image coordinates
+
+# to_dict() output:
+{
+    "class": "person",
+    "score": 0.92,
+    "bbox": {"x1": 100.5, "y1": 50.2, "x2": 300.8, "y2": 400.1}
+}
+```
+
+#### Annotation
+
+```python
+annotated_image = predictor.get_annotated_image(image, predictions[0])
+# Returns PIL.Image with bounding boxes drawn
+```
+
+</details>
+
+<details>
+<summary>Click to expand</summary>
+
+### InstanceSegmentationPredictor
+
+For instance segmentation models that output bounding boxes and per-instance masks.
+
+#### ONNX Graph Requirements
+
+|             |                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| **Inputs**  | `images`: `[batch, height, width, 3]` uint8 RGB                                                   |
+|             | `target_sizes`: `[batch, 2]` float32 containing `[height, width]` of original images              |
+| **Outputs** | `boxes`: `[batch, num_detections, 4]` float32 as `[x1, y1, x2, y2]` in original image coordinates |
+|             | `scores`: `[batch, num_detections]` float32 confidence scores                                     |
+|             | `labels`: `[batch, num_detections]` int64 class indices                                           |
+|             | `masks`: `[batch, num_detections, mask_height, mask_width]` float32 mask logits                   |
+
+The ONNX graph must rescale bounding boxes to original image dimensions using `target_sizes`. Masks can be any resolution—they are resized to original image dimensions in Python postprocessing using bilinear interpolation.
+
+#### Usage
 
 ```python
 from orient_express.predictors import InstanceSegmentationPredictor
-from orient_express.vertex import upload_model
 
-# 1. Define your class mapping (ID -> Name)
-classes = {
-    1: "person",
-    2: "bicycle",
-    3: "car"
+predictor = InstanceSegmentationPredictor(
+    onnx_path="instance_seg.onnx",
+    classes={1: "person", 2: "car", 3: "bicycle"}
+)
+
+predictions = predictor.predict(images, confidence=0.5)
+# Returns: list[list[InstanceSegmentationPrediction]]
+```
+
+#### Output Structure
+
+```python
+@dataclass
+class InstanceSegmentationPrediction:
+    clss: str           # Class name
+    score: float        # Confidence score
+    bbox: np.ndarray    # [x1, y1, x2, y2] in original image coordinates
+    mask: np.ndarray    # Boolean mask at original image resolution
+
+# to_dict(include_mask=False) output:
+{
+    "class": "person",
+    "score": 0.89,
+    "bbox": {"x1": 100.5, "y1": 50.2, "x2": 300.8, "y2": 400.1}
 }
 
-# 2. Instantiate the local predictor
-# This wraps your ONNX file and handles standardized post-processing
-local_predictor = InstanceSegmentationPredictor(
-    model_path="path/to/my_model.onnx", 
-    classes=classes
-)
-
-# 3. Upload to Vertex AI Model Registry
-# This dumps the necessary metadata and artifacts and registers the model
-vertex_model = upload_model(
-    model=local_predictor,
-    model_name="traffic-segmentation",
-    project_name="my-gcp-project",
-    region="us-central1",
-    bucket_name="my-artifact-bucket"
-)
-
-print(f"Model uploaded: {vertex_model.name} version {vertex_model.version}")
+# to_dict(include_mask=True) adds:
+{
+    ...
+    "mask": [[True, True, False, ...], ...]  # 2D boolean list
+}
 ```
 
-## Workflow 2: Local Inference
-
-> **Prerequisite:** This workflow **only** works for models that have already been uploaded to the registry via [Workflow 1](#workflow-1-export--upload-model).
-
-You can pull a model from the registry to run inference on your local machine without deploying a remote endpoint.
+#### Annotation
 
 ```python
-from orient_express.vertex import get_vertex_model
-from PIL import Image
-
-# 1. Fetch the model reference from Vertex Registry
-vertex_model = get_vertex_model(
-    model_name="traffic-segmentation",
-    project_name="my-gcp-project",
-    region="us-central1"
-)
-
-# 2. Download artifacts and instantiate the predictor locally
-predictor = vertex_model.get_local_predictor()
-
-# 3. Run Inference
-image = Image.open("street.jpg")
-predictions = predictor.predict(
-    images=[image], 
-    confidence=0.5
-)
-
-# 4. Visualization (Optional)
-debug_image = predictor.get_annotated_image(image, predictions[0])
-debug_image.show()
+annotated_image = predictor.get_annotated_image(image, predictions[0])
+# Returns PIL.Image with mask overlays and instance indices
 ```
 
-## Workflow 3: Remote Inference (Online Endpoint)
+</details>
 
-> **Prerequisite:** This workflow **only** works for models that have already been uploaded to the registry via [Workflow 1](#workflow-1-export--upload-model).
+<details>
+<summary>Click to expand</summary>
 
-Deploy the model to a Vertex AI Endpoint and run inference via API calls.
+### SemanticSegmentationPredictor
+
+For semantic segmentation models that output per-pixel class predictions.
+
+#### ONNX Graph Requirements
+
+|             |                                                                               |
+| ----------- | ----------------------------------------------------------------------------- |
+| **Inputs**  | `images`: `[batch, height, width, 3]` uint8 RGB                               |
+| **Outputs** | `masks`: `[batch, num_classes, mask_height, mask_width]` float32 class logits |
+
+Masks can be any resolution—they are resized to original image dimensions in Python postprocessing. The class dimension is reduced via argmax to produce a single class ID per pixel.
+
+#### Usage
 
 ```python
-from orient_express.vertex import get_vertex_model
+from orient_express.predictors import SemanticSegmentationPredictor
 
-# 1. Get the model
-vertex_model = get_vertex_model(
-    model_name="traffic-segmentation",
-    project_name="my-gcp-project",
-    region="us-central1"
+predictor = SemanticSegmentationPredictor(
+    onnx_path="semantic_seg.onnx",
+    classes={0: "background", 1: "road", 2: "building", 3: "vegetation"}
 )
 
-# 2. Deploy to an Endpoint
-# This creates a Vertex Endpoint and deploys the model container
-vertex_model.deploy_to_endpoint(
-    endpoint_name="traffic-seg-endpoint",
-    machine_type="n1-standard-4",
-    min_replica_count=1,
-    max_replica_count=2
-)
-
-# 3. Remote Prediction
-# Orient Express handles image encoding/decoding automatically
-instances = [
-    {"image": "gs://my-bucket/street.jpg"}, # GCS URI
-    {"image": "http://example.com/car.jpg"} # HTTP URL
-]
-
-results = vertex_model.remote_predict(
-    instances=instances,
-    endpoint_name="traffic-seg-endpoint"
-)
-
-print(results)
+predictions = predictor.predict(images)
+# Returns: list[SemanticSegmentationPrediction]
 ```
 
-## Prediction Return Types
+#### Output Structure
 
-The `predict()` methods return standardized dataclasses depending on the predictor type.
+```python
+@dataclass
+class SemanticSegmentationPrediction:
+    class_mask: np.ndarray   # [height, width] int array of class indices
+    conf_masks: np.ndarray   # [num_classes, height, width] float confidence per class
 
-### `ClassificationPrediction`
-* `clss` (str): The name of the highest scoring class.
-* `score` (float): The confidence score of the highest class.
-* `class_scores` (dict[str, float]): Dictionary of all classes and their scores.
+# to_dict(include_conf_masks=False) output:
+{
+    "class_mask": [[0, 0, 1, 2, ...], ...]  # 2D int array
+}
 
-### `BoundingBoxPrediction`
-* `clss` (str): Detected class name.
-* `score` (float): Confidence score.
-* `bbox` (np.ndarray): Array `[x1, y1, x2, y2]` (absolute coordinates).
-
-### `InstanceSegmentationPrediction`
-* `clss` (str): Detected class name.
-* `score` (float): Confidence score.
-* `bbox` (np.ndarray): Array `[x1, y1, x2, y2]`.
-* `mask` (np.ndarray): Boolean array representing the segmentation mask (same size as original image).
-
-### `SemanticSegmentationPrediction`
-* `class_mask` (np.ndarray): 2D array where each pixel value corresponds to a class ID.
-* `conf_masks` (np.ndarray): Raw confidence masks.
-## Installation
-
+# to_dict(include_conf_masks=True) adds:
+{
+    ...
+    "conf_masks": [[[0.1, 0.2, ...], ...], ...]  # 3D float array
+}
 ```
-pip install orient_express
+
+#### Annotation
+
+```python
+annotated_image = predictor.get_annotated_image(image, predictions[0].class_mask)
+# Returns PIL.Image with color-coded segmentation overlay
 ```
+
+</details>
+
+---
+
+## Color Schemes
+
+For predictors that support annotation (`BoundingBoxPredictor`, `InstanceSegmentationPredictor`, `SemanticSegmentationPredictor`), you can set a custom color scheme:
+
+```python
+predictor.color_scheme = {
+    "person": (255, 0, 0),    # Red (RGB)
+    "car": (0, 255, 0),       # Green
+    "bicycle": (0, 0, 255),   # Blue
+}
+```
+
+Colors are specified as RGB tuples.
+
+## Legacy API [Still Maintained]
+
+<details>
+<summary>Click to expand</summary>
 
 ## Example
 
@@ -313,6 +542,7 @@ model_wrapper  = ModelExpress(project_name='my-project-name',
 ## Remote Inference (With Online Prediction Endpoint)
 
 Make sure the model is deployed:
+
 ```python
 
 model_wrapper  = ModelExpress(model=model,
@@ -348,6 +578,7 @@ model_wrapper.remote_predict(df)
 Orient express library also have a helper function to simplify Vertex AI pipeline deployment.
 
 Create `deploy.py` script
+
 ```python
 
 from orient_express.deployment import deploy_pipeline
@@ -378,6 +609,7 @@ if __name__ == "__main__":
 ```
 
 And conf.py, make sure to replace the sample values with yours.
+
 ```python
 
 import os
@@ -403,6 +635,7 @@ SCHEDULE_NAME = "My Pipeline"
 ```
 
 For testing it on a local machine, make sure to authorize to GCP first
+
 ```shell
 
 gcloud auth application-default login
@@ -410,13 +643,17 @@ gcloud auth application-default login
 ```
 
 Finally, run the pipeline (it will execute once)
+
 ```shell
 
 python deploy.py --run-type single-run
 ```
 
 Or, create a scheduler to run continuously
+
 ```shell
 
 python deploy.py --run-type scheduled
 ```
+
+</details>

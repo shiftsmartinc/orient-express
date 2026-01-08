@@ -1,6 +1,8 @@
 import os
 import tempfile
 
+import yaml
+import joblib
 from google.cloud import storage, aiplatform
 
 from .predictors import get_predictor, Predictor
@@ -116,6 +118,23 @@ def upload_model(
     serving_container_predict_route: str = "",
     labels: dict[str, str] | None = {},
 ):
+    """
+    Upload a Predictor model to Vertex AI Model Registry.
+
+    Args:
+        model: Any joblib-serializable model
+        model_name: Display name for the model in the registry
+        project_name: GCP project ID
+        region: GCP region (e.g., 'us-central1')
+        bucket_name: GCS bucket for storing model artifacts
+        serving_container_image_uri: Docker image URI for serving the model
+        serving_container_health_route: Health check endpoint route
+        serving_container_predict_route: Prediction endpoint route
+        labels: Optional labels to attach to the model
+
+    Returns:
+        VertexModel instance
+    """
     if not serving_container_image_uri:
         serving_container_image_uri = model.get_serving_container_image_uri()
     if not serving_container_health_route:
@@ -128,6 +147,67 @@ def upload_model(
         )
     with tempfile.TemporaryDirectory() as temp_dir:
         file_list = model.dump(temp_dir)
+        vertex_model = upload_model_with_files(
+            file_list,
+            model_name,
+            project_name,
+            region,
+            bucket_name,
+            serving_container_image_uri,
+            serving_container_health_route,
+            serving_container_predict_route,
+            labels,
+        )
+    return vertex_model
+
+
+def upload_model_joblib(
+    model,
+    model_name: str,
+    project_name: str,
+    region: str,
+    bucket_name: str,
+    serving_container_image_uri: str,
+    serving_container_health_route: str,
+    serving_container_predict_route: str,
+    labels: dict[str, str] | None = {},
+):
+    """
+    Upload a joblib-serializable model to Vertex AI Model Registry.
+
+    Unlike upload_model which works with Predictor instances, this function
+    accepts any model that can be serialized with joblib (e.g., scikit-learn
+    pipelines, XGBoost models).
+
+    Args:
+        model: Any joblib-serializable model
+        model_name: Display name for the model in the registry
+        project_name: GCP project ID
+        region: GCP region (e.g., 'us-central1')
+        bucket_name: GCS bucket for storing model artifacts
+        serving_container_image_uri: Docker image URI for serving the model
+        serving_container_health_route: Health check endpoint route
+        serving_container_predict_route: Prediction endpoint route
+        labels: Optional labels to attach to the model
+
+    Returns:
+        VertexModel instance
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        model_path = os.path.join(temp_dir, "model.joblib")
+        metadata_path = os.path.join(temp_dir, "metadata.yaml")
+
+        joblib.dump(model, model_path)
+
+        metadata = {
+            "model_type": "joblib",
+            "model_file": "model.joblib",
+        }
+        with open(metadata_path, "w") as f:
+            yaml.dump(metadata, f)
+
+        file_list = [metadata_path, model_path]
+
         vertex_model = upload_model_with_files(
             file_list,
             model_name,
