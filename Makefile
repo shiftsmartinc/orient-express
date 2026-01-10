@@ -2,7 +2,7 @@ XGBOOST_SCIKIT_LEARN := us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xg
 XGBOOST_TAG := latest
 
 IMAGE_ONNX := us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx
-IMAGE_ONNX_TAG := v2
+IMAGE_ONNX_TAG := v2.1
 
 build_local_xgboost_scikit_learn:
 	docker buildx build --tag $(XGBOOST_SCIKIT_LEARN):$(XGBOOST_TAG)_local -f docker-xgboost-scikit-learn/Dockerfile .

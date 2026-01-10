@@ -65,15 +65,16 @@ class VertexModel:
             location=self.region,
         )
 
-    def remote_predict(self, instances: list, endpoint_name: str):
+    def remote_predict(
+        self, endpoint_name: str, instances: list, parameters: dict | None = None
+    ):
         endpoint = self.get_endpoint(endpoint_name)
         if not endpoint:
             raise Exception(
                 f"Endpoint '{endpoint_name}' not found. Please deploy the model first."
             )
         self.endpoint = endpoint
-
-        predictions = self.endpoint.predict(instances=instances)
+        predictions = self.endpoint.predict(instances=instances, parameters=parameters)
         return predictions.predictions
 
     def get_local_predictor(self):
