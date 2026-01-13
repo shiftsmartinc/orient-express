@@ -694,8 +694,41 @@ class TestEndpointManagement:
                 instances=instances, endpoint_name="my-endpoint"
             )
 
-            mock_endpoint.predict.assert_called_once_with(instances=instances)
+            mock_endpoint.predict.assert_called_once_with(
+                instances=instances, parameters=None
+            )
             assert result == [{"class": "cat", "score": 0.9}]
+
+    def test_remote_predict_calls_endpoint_predict_with_parameters(self):
+        mock_endpoint = MagicMock()
+        mock_endpoint.predict.return_value = MagicMock(
+            predictions=[{"class": "cat", "score": 0.9}, {"class": "dog", "score": 0.8}]
+        )
+
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [mock_endpoint]
+
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="test-project",
+                region="us-central1",
+                version=1,
+            )
+            instances = [{"image": "base64data"}, {"image": "base64data2"}]
+            result = vertex_model.remote_predict(
+                instances=instances,
+                endpoint_name="my-endpoint",
+                parameters={"foo": "bar"},
+            )
+
+            mock_endpoint.predict.assert_called_once_with(
+                instances=instances, parameters={"foo": "bar"}
+            )
+            assert result == [
+                {"class": "cat", "score": 0.9},
+                {"class": "dog", "score": 0.8},
+            ]
 
 
 # -----------------------------------------------------------------------------
