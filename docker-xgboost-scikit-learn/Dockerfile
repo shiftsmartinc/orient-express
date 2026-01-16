@@ -4,11 +4,11 @@ RUN apt update && apt install -y pip
 
 RUN pip install poetry
 
-ADD docker-xgboost-scikit-learn/run_inference_server.py .
-ADD poetry.lock .
-ADD pyproject.toml .
-ADD docker-xgboost-scikit-learn/logging.conf .
+COPY docker-xgboost-scikit-learn/run_inference_server.py .
+COPY poetry.lock .
+COPY pyproject.toml .
+COPY docker-xgboost-scikit-learn/logging.conf .
 
-RUN poetry install --with inference
+RUN poetry install --with xgboost-scikit-learn --no-root
 
 ENTRYPOINT ["poetry", "run", "python3", "run_inference_server.py"]

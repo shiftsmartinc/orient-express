@@ -1,10 +1,8 @@
 import logging
-import argparse
 from typing import Optional
 
 from kfp import compiler, dsl
 
-import conf
 import google.cloud.aiplatform as aip
 
 
