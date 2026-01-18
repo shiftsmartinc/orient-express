@@ -166,8 +166,8 @@ class InstanceSegmentationPredictor(ImagePredictor):
         centroid_x = int((prediction.bbox[0] + prediction.bbox[2]) / 2)
         centroid_y = int((prediction.bbox[1] + prediction.bbox[3]) / 2)
         # Put the object count in the center of the bbox
-        font_scale = 1.5
-        font_thickness = 4
+        font_scale = 12
+        font_thickness = 12
         text = str(index)
         text_size = cv2.getTextSize(
             text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness

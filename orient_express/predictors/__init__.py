@@ -17,6 +17,10 @@ from .semantic_segmentation import (
     SemanticSegmentationPrediction,
 )
 from .classification import ClassificationPredictor, ClassificationPrediction
+from .multi_label_classification import (
+    MultiLabelClassificationPredictor,
+    MultiLabelClassificationPrediction,
+)
 
 
 def get_predictor(dir: str):
@@ -50,6 +54,10 @@ def get_predictor(dir: str):
             return load_image_predictor(SemanticSegmentationPredictor, dir, metadata)
         elif model_type == ClassificationPredictor.model_type:
             return load_image_predictor(ClassificationPredictor, dir, metadata)
+        elif model_type == MultiLabelClassificationPredictor.model_type:
+            return load_image_predictor(
+                MultiLabelClassificationPredictor, dir, metadata
+            )
         else:
             raise Exception(f"Unknown model_type '{model_type}'")
 
