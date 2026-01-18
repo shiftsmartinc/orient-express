@@ -14,8 +14,34 @@ Both workflows handle versioning, artifact storage in GCS, and integration with 
 
 ## Installation
 
+For CPU-only inference:
 ```bash
-pip install orient_express
+pip install "orient_express[cpu]"
+```
+
+For GPU inference:
+```bash
+pip install "orient_express[gpu]"
+pip uninstall torch torchvision
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+For local development:
+```bash
+# CPU
+pip install -e ".[cpu]"
+
+# GPU
+pip install -e ".[gpu]"
+pip uninstall torch torchvision
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+```
+
+Or with Poetry:
+```bash
+poetry install --extras cpu
+# or
+poetry install --extras gpu
 ```
 
 ## Workflows
