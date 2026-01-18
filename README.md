@@ -213,6 +213,53 @@ class ClassificationPrediction:
 
 </details>
 
+### MultiLabelClassificationPredictor
+
+<details>
+<summary>Click to expand</summary>
+
+For image multi-label classification models that output a set of binary class probabilities.
+
+#### ONNX Graph Requirements
+
+|             |                                                              |
+| ----------- | ------------------------------------------------------------ |
+| **Inputs**  | `images`: `[batch, height, width, 3]` uint8 RGB              |
+| **Outputs** | `scores`: `[batch, num_classes]` float32 class probabilities |
+
+The graph must handle normalization internally. No target_sizes input is needed.
+
+#### Usage
+
+```python
+from orient_express.predictors import MultiLabelClassificationPredictor
+
+predictor = MultiLabelClassificationPredictor(
+    onnx_path="classifier.onnx",
+    classes={1: "contains_cat", 2: "contains_dog", 3: "contains_bird"}
+)
+
+predictions = predictor.predict(images, confidence=0.5)
+# Returns: list[MultiLabelClassificationPrediction]
+```
+
+#### Output Structure
+
+```python
+@dataclass
+class MultiLabelClassificationPrediction:
+    classes: list[str]             # Predicted class names based on confidence threshold
+    class_scores: dict[str, float] # Scores for all classes
+
+# to_dict() output:
+{
+    "classes": ["contains_cat", "contains_bird"],
+    "class_scores": {"contains_cat": 0.95, "contains_dog": 0.03, "contains_bird": 0.82}
+}
+```
+
+</details>
+
 ### BoundingBoxPredictor
 
 <details>

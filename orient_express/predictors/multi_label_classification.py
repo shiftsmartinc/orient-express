@@ -8,20 +8,18 @@ from .predictor import OnnxSessionWrapper, ImagePredictor
 
 
 @dataclass
-class ClassificationPrediction:
-    clss: str
-    score: float
+class MultiLabelClassificationPrediction:
+    classes: list[str]
     class_scores: dict[str, float]
 
     def to_dict(self):
         return {
-            "class": self.clss,
-            "score": self.score,
+            "classes": self.classes,
             "class_scores": self.class_scores,
         }
 
 
-class OnnxClassifier(OnnxSessionWrapper):
+class OnnxMultiLabelClassifier(OnnxSessionWrapper):
     def __call__(self, pil_images: list[Image.Image]):
         images = [
             cv2.resize(np.array(pil_img), (self.resolution, self.resolution))
@@ -35,23 +33,26 @@ class OnnxClassifier(OnnxSessionWrapper):
         return scores
 
 
-class ClassificationPredictor(ImagePredictor):
-    model_type = "classification-onnx"
-    backend_model = OnnxClassifier
+class MultiLabelClassificationPredictor(ImagePredictor):
+    model_type = "multi-label-classification-onnx"
+    backend_model = OnnxMultiLabelClassifier
 
-    def predict(self, images: list[Image.Image]) -> list[ClassificationPrediction]:
+    def predict(
+        self, images: list[Image.Image], confidence: float
+    ) -> list[MultiLabelClassificationPrediction]:
         if not images:
             return []
         raw_outputs = self.model(images)
         outputs = []
         for class_scores in raw_outputs:
-            max_class_idx = class_scores.argmax()
+            classes = []
             # self.classes is 1-indexed
-            max_clss = self.classes.get(max_class_idx + 1, "Unknown")
+            for idx, score in enumerate(class_scores):
+                if score > confidence:
+                    classes.append(self.classes.get(idx + 1, "Unknown"))
             outputs.append(
-                ClassificationPrediction(
-                    clss=max_clss,
-                    score=float(class_scores[max_class_idx]),
+                MultiLabelClassificationPrediction(
+                    classes=classes,
                     class_scores={
                         # self.classes is 1-indexed
                         clss: float(class_scores[class_idx - 1])
@@ -62,6 +63,6 @@ class ClassificationPredictor(ImagePredictor):
         return outputs
 
     def get_annotated_image(
-        self, image: Image.Image, predictions: ClassificationPrediction
+        self, image: Image.Image, predictions: MultiLabelClassificationPrediction
     ):
         return None
