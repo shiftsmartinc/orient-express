@@ -37,7 +37,9 @@ class MultiLabelClassificationPredictor(ImagePredictor):
     model_type = "multi-label-classification-onnx"
     backend_model = OnnxMultiLabelClassifier
 
-    def predict(self, images: list[Image.Image], confidence: float) -> list[MultiLabelClassificationPrediction]:
+    def predict(
+        self, images: list[Image.Image], confidence: float
+    ) -> list[MultiLabelClassificationPrediction]:
         if not images:
             return []
         raw_outputs = self.model(images)

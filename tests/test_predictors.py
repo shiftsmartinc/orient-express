@@ -35,7 +35,6 @@ from orient_express.predictors.semantic_segmentation import (
     SemanticSegmentationPrediction,
 )
 
-
 # -----------------------------------------------------------------------------
 # Fixtures
 # -----------------------------------------------------------------------------
@@ -185,9 +184,9 @@ class TestClassificationPredictor:
         self, mock_classifier_session, sample_images, class_mapping
     ):
         """Multiple images of different sizes are all resized and batched."""
-        mock_classifier_session.run_outputs = [np.array(
-            [[0.1, 0.7, 0.2], [0.1, 0.7, 0.2], [0.1, 0.7, 0.2]]
-        )]
+        mock_classifier_session.run_outputs = [
+            np.array([[0.1, 0.7, 0.2], [0.1, 0.7, 0.2], [0.1, 0.7, 0.2]])
+        ]
 
         with patch(
             "orient_express.predictors.predictor.ort.InferenceSession",
@@ -431,10 +430,12 @@ class TestMultiLabelClassificationPredictor:
         img2 = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8), mode="RGB")
 
         mock_multi_label_session.run_outputs = [
-            np.array([
-                [0.9, 0.1, 0.1],  # Image 1: only cat
-                [0.1, 0.9, 0.9],  # Image 2: dog and bird
-            ])
+            np.array(
+                [
+                    [0.9, 0.1, 0.1],  # Image 1: only cat
+                    [0.1, 0.9, 0.9],  # Image 2: dog and bird
+                ]
+            )
         ]
 
         with patch(
