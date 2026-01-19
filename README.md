@@ -18,6 +18,16 @@ Both workflows handle versioning, artifact storage in GCS, and integration with 
 pip install orient_express
 ```
 
+For local development:
+```bash
+pip install -e .
+```
+
+Or with Poetry:
+```bash
+poetry install
+```
+
 ## Workflows
 
 ### ONNX Image Model Workflow
@@ -135,6 +145,43 @@ vertex_model = get_vertex_model(
 # 4. Run locally
 local_predictor = vertex_model.get_local_predictor()
 predictions = local_predictor.predict(X_test)
+```
+
+## ONNX Runtime and Device Support
+
+### Platform Support Matrix
+
+| Platform | Architecture | ONNX Runtime Package | CUDA Available |
+|----------|--------------|---------------------|----------------|
+| Linux    | x86_64       | onnxruntime-gpu     | Yes            |
+| Linux    | aarch64      | onnxruntime         | No             |
+| Windows  | x64 (AMD64)  | onnxruntime-gpu     | Yes            |
+| Windows  | ARM64        | onnxruntime         | No             |
+| macOS    | x86_64       | onnxruntime         | No             |
+| macOS    | arm64        | onnxruntime         | No             |
+
+The appropriate package is installed automatically based on your platform.
+
+### Selecting CPU vs CUDA Execution
+
+When loading a predictor, use the `device` parameter to specify the execution provider:
+```python
+from orient_express.predictors import ObjectDetectionPredictor
+
+# CPU inference (works on all platforms)
+predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cpu")
+
+# CUDA inference (requires Linux x64 or Windows x64 with CUDA drivers)
+predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cuda")
+```
+
+When using a Vertex AI model:
+```python
+# CPU inference
+predictor = model.get_local_predictor(device="cpu")
+
+# CUDA inference
+predictor = model.get_local_predictor(device="cuda")
 ```
 
 ### Pinning Model Versions

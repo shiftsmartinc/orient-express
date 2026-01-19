@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "orient_express"
-version = "2.0"
+version = "2.1"
 description = "A library to simplify model deployment to Vertex AI"
 authors = ["Alexey Zankevich <alex.zankevich@shiftsmart.com>", "Ian Myers <ian.myers@shiftsmart.com>"]
 readme = "README.md"
@@ -12,29 +12,23 @@ google-cloud-storage = "*"
 pandas = "*"
 pyyaml = "^6.0"
 
-[tool.poetry.group.dev.dependencies]
-black = "24.10.0"
-pytest = "8.3.3"
-scikit-learn = "1.5.2"
-xgboost = "2.1.2"
-
-[tool.poetry.group.xgboost-scikit-learn.dependencies]
-scikit-learn = "1.5.2"
 kserve = "0.16.0"
-python-json-logger = "2.0.7"
-gcsfs = "^2024.10.0"
-
-[tool.poetry.group.image-onnx.dependencies]
-onnxruntime = "^1.20" # no gpu for now
-kserve = "0.16.0"
-# torch = "^2.5.0"
-# torchvision = "^0.20.0"
 torch = {version = "^2.5.0", source = "pytorch-cpu"}
 torchvision = {version = "^0.20.0", source = "pytorch-cpu"}
 opencv-python-headless = "4.11.0.86"
 Pillow = "10.0.1"
 python-json-logger = "2.0.7"
 gcsfs = "^2024.10.0"
+
+scikit-learn = "1.5.2"
+xgboost = "2.1.2"
+
+onnxruntime-gpu = {version = "^1.20", markers = "sys_platform == 'linux' and platform_machine == 'x86_64' or sys_platform == 'win32' and platform_machine == 'AMD64'"}
+onnxruntime = {version = "^1.20", markers = "sys_platform == 'darwin' or platform_machine == 'aarch64' or platform_machine == 'arm64' or sys_platform == 'win32' and platform_machine == 'ARM64'"}
+
+[tool.poetry.group.dev.dependencies]
+black = "24.10.0"
+pytest = "8.3.3"
 
 [build-system]
 requires = ["poetry-core"]

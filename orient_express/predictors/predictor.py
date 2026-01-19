@@ -1,5 +1,6 @@
 import os
 from abc import ABC, abstractmethod
+import warnings
 
 import yaml
 import onnxruntime as ort
@@ -34,8 +35,8 @@ class ImagePredictor(Predictor):
     backend_model: type
     prediction_type: type
 
-    def __init__(self, model_path: str, classes: dict[int, str]):
-        self.model = self.backend_model(model_path)
+    def __init__(self, model_path: str, classes: dict[int, str], device: str = "cpu"):
+        self.model = self.backend_model(model_path, device)
         self.color_scheme = generate_color_scheme(list(classes.values()))
         self.classes = classes
         self.model_path = model_path
@@ -63,7 +64,7 @@ class ImagePredictor(Predictor):
 
 
 class OnnxSessionWrapper:
-    def __init__(self, onnx_path, providers=["CPUExecutionProvider"]):
+    def __init__(self, onnx_path: str, device: str = "cpu"):
         session_options = ort.SessionOptions()
         session_options.graph_optimization_level = (
             ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -71,6 +72,16 @@ class OnnxSessionWrapper:
         session_options.enable_mem_pattern = True
         session_options.enable_cpu_mem_arena = True
         session_options.enable_mem_reuse = True
+
+        if device == "cpu":
+            providers = ["CPUExecutionProvider"]
+        elif device == "cuda":
+            providers = ["CUDAExecutionProvider"]
+        else:
+            warnings.warn(
+                f"Unknown device '{device}'. Defaulting to CPU. Supported devices: 'cpu', 'cuda'."
+            )
+            providers = ["CPUExecutionProvider"]
 
         self.session = ort.InferenceSession(
             onnx_path, providers=providers, sess_options=session_options

@@ -7,7 +7,6 @@ from google.cloud import storage, aiplatform
 
 from .predictors import get_predictor, Predictor
 
-
 ARTIFACT_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 _vertex_initialized = False
 
@@ -77,10 +76,10 @@ class VertexModel:
         predictions = self.endpoint.predict(instances=instances, parameters=parameters)
         return predictions.predictions
 
-    def get_local_predictor(self):
+    def get_local_predictor(self, device: str = "cpu"):
         dir = os.path.join(ARTIFACT_DIR, self.model_name + "-" + str(self.version))
         self.download_artifacts(dir)
-        return get_predictor(dir)
+        return get_predictor(dir, device)
 
     def download_artifacts(self, dir: str):
         download_artifacts(dir, self.vertex_model.gca_resource.artifact_uri)

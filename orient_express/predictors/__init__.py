@@ -23,7 +23,7 @@ from .multi_label_classification import (
 )
 
 
-def get_predictor(dir: str):
+def get_predictor(dir: str, device: str = "cpu"):
     downloaded_files = os.listdir(dir)
     metadata_path = get_metadata_path(dir)
     if not os.path.exists(metadata_path):
@@ -47,24 +47,30 @@ def get_predictor(dir: str):
             joblib_path = os.path.join(dir, metadata["model_file"])
             return joblib.load(joblib_path)
         elif model_type == InstanceSegmentationPredictor.model_type:
-            return load_image_predictor(InstanceSegmentationPredictor, dir, metadata)
+            return load_image_predictor(
+                InstanceSegmentationPredictor, dir, metadata, device
+            )
         elif model_type == BoundingBoxPredictor.model_type:
-            return load_image_predictor(BoundingBoxPredictor, dir, metadata)
+            return load_image_predictor(BoundingBoxPredictor, dir, metadata, device)
         elif model_type == SemanticSegmentationPredictor.model_type:
-            return load_image_predictor(SemanticSegmentationPredictor, dir, metadata)
+            return load_image_predictor(
+                SemanticSegmentationPredictor, dir, metadata, device
+            )
         elif model_type == ClassificationPredictor.model_type:
-            return load_image_predictor(ClassificationPredictor, dir, metadata)
+            return load_image_predictor(ClassificationPredictor, dir, metadata, device)
         elif model_type == MultiLabelClassificationPredictor.model_type:
             return load_image_predictor(
-                MultiLabelClassificationPredictor, dir, metadata
+                MultiLabelClassificationPredictor, dir, metadata, device
             )
         else:
             raise Exception(f"Unknown model_type '{model_type}'")
 
 
-def load_image_predictor(model_type: type[ImagePredictor], dir: str, metadata: dict):
+def load_image_predictor(
+    model_type: type[ImagePredictor], dir: str, metadata: dict, device: str = "cpu"
+):
     onnx_path = os.path.join(dir, metadata["model_file"])
     if "classes" not in metadata:
         raise Exception("No classes defined in metadata.yaml")
     classes = metadata["classes"]
-    return model_type(onnx_path, classes)
+    return model_type(onnx_path, classes, device)
