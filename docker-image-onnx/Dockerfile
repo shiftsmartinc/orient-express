@@ -9,5 +9,5 @@ COPY pyproject.toml .
 COPY README.md .
 COPY orient_express/ orient_express/
 RUN poetry config virtualenvs.create false
-RUN poetry install --with image-onnx
+RUN poetry install 
 ENTRYPOINT ["python3", "run_inference_server.py"]
