@@ -1,14 +1,11 @@
-FROM ubuntu:22.04
-
-RUN apt update && apt install -y pip
-
+FROM ubuntu:24.04
+RUN apt update && apt install -y python3 python3-pip
+RUN pip config set global.break-system-packages true
 RUN pip install poetry
-
-COPY docker-xgboost-scikit-learn/run_inference_server.py .
+WORKDIR /app
+COPY docker-xgboost-scikit-learn/ .
 COPY poetry.lock .
 COPY pyproject.toml .
-COPY docker-xgboost-scikit-learn/logging.conf .
-
-RUN poetry install --with xgboost-scikit-learn --no-root
-
+RUN poetry config virtualenvs.create false
+RUN poetry install --no-root
 ENTRYPOINT ["poetry", "run", "python3", "run_inference_server.py"]

@@ -42,7 +42,7 @@ class ImagePredictor(Predictor):
         self.model_path = model_path
 
     def get_serving_container_image_uri(self):
-        return "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:v2.1"
+        return "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:v2.1.1"
 
     def get_serving_container_health_route(self, model_name):
         return f"/v1/models/{model_name}"
