@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "orient_express"
-version = "2.1"
+version = "2.0"
 description = "A library to simplify model deployment to Vertex AI"
 authors = ["Alexey Zankevich <alex.zankevich@shiftsmart.com>", "Ian Myers <ian.myers@shiftsmart.com>"]
 readme = "README.md"
@@ -23,12 +23,8 @@ gcsfs = "^2024.10.0"
 scikit-learn = "1.5.2"
 xgboost = "2.1.2"
 
-onnxruntime = {version = "^1.20", optional = true}
-onnxruntime-gpu = {version = "^1.20", optional = true}
-
-[tool.poetry.extras]
-cpu = ["onnxruntime"]
-gpu = ["onnxruntime-gpu"]
+onnxruntime-gpu = {version = "^1.20", markers = "sys_platform == 'linux' and platform_machine == 'x86_64' or sys_platform == 'win32' and platform_machine == 'AMD64'"}
+onnxruntime = {version = "^1.20", markers = "sys_platform == 'darwin' or platform_machine == 'aarch64' or platform_machine == 'arm64' or sys_platform == 'win32' and platform_machine == 'ARM64'"}
 
 [tool.poetry.group.dev.dependencies]
 black = "24.10.0"
