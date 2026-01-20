@@ -30,13 +30,17 @@ class BoundingBoxPrediction:
 
 
 class OnnxDetector(OnnxSessionWrapper):
-    def preprocess(self, pil_images: list[Image.Image]):
-        sizes = [[pil_img.size[1], pil_img.size[0]] for pil_img in pil_images]
-        images = [
-            cv2.resize(np.array(pil_img), (self.resolution, self.resolution))
-            for pil_img in pil_images
-        ]
-        return np.array(images), np.array(sizes, dtype=np.float32)
+    def __call__(self, pil_images: list[Image.Image], confidence: float = 0.5):
+        images_array = self.collate_images(pil_images)
+        target_sizes_array = self.collate_sizes(pil_images)
+
+        input_dict = {
+            self.input_names[0]: images_array,
+            self.input_names[1]: target_sizes_array,
+        }
+
+        boxes, scores, labels = self.session.run(None, input_dict)
+        return self.postprocess(boxes, scores, labels, confidence)
 
     def postprocess(
         self,
@@ -66,17 +70,6 @@ class OnnxDetector(OnnxSessionWrapper):
             results.append(result)
 
         return results
-
-    def __call__(self, pil_images: list[Image.Image], confidence: float = 0.5):
-        images_array, target_sizes_array = self.preprocess(pil_images)
-
-        input_dict = {
-            self.input_names[0]: images_array,
-            self.input_names[1]: target_sizes_array,
-        }
-
-        boxes, scores, labels = self.session.run(None, input_dict)
-        return self.postprocess(boxes, scores, labels, confidence)
 
 
 class BoundingBoxPredictor(ImagePredictor):

@@ -82,8 +82,16 @@ def image_to_bytes(image):
     return buffered.getvalue()
 
 
+def base64_to_image(base64_data: str):
+    return Image.open(BytesIO(base64.b64decode(base64_data)))
+
+
+def image_to_array(image: Image.Image):
+    return np.array(image.convert("RGB"))
+
+
 def pil_to_opencv(image: Image.Image):
-    return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+    return cv2.cvtColor(image_to_array(image), cv2.COLOR_RGB2BGR)
 
 
 def opencv_to_pil(image: np.ndarray):

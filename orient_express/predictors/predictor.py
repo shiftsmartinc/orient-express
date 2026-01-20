@@ -4,9 +4,13 @@ import warnings
 
 import yaml
 import onnxruntime as ort
+from PIL import Image
+import cv2
+import numpy as np
 
 from ..utils.paths import get_metadata_path
 from ..utils.colors import generate_color_scheme
+from ..utils.image_processor import image_to_array
 
 
 class Predictor(ABC):
@@ -42,7 +46,7 @@ class ImagePredictor(Predictor):
         self.model_path = model_path
 
     def get_serving_container_image_uri(self):
-        return "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:v2.1.1"
+        return "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:v2.1.2"
 
     def get_serving_container_health_route(self, model_name):
         return f"/v1/models/{model_name}"
@@ -92,3 +96,12 @@ class OnnxSessionWrapper:
 
         input_shape = self.session.get_inputs()[0].shape
         self.resolution = input_shape[1]
+        self.img_size = (self.resolution, self.resolution)
+
+    def collate_sizes(self, pil_images: list[Image.Image]):
+        sizes = [[img.size[1], img.size[0]] for img in pil_images]
+        return np.array(sizes, dtype=np.float32)
+
+    def collate_images(self, pil_images: list[Image.Image]):
+        images = [cv2.resize(image_to_array(img), self.img_size) for img in pil_images]
+        return np.array(images)
