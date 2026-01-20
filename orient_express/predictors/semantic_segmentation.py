@@ -25,13 +25,12 @@ class SemanticSegmentationPrediction:
 
 
 class OnnxSemanticSegmentation(OnnxSessionWrapper):
-    def preprocess(self, pil_images: list[Image.Image]):
-        sizes = [[pil_img.size[1], pil_img.size[0]] for pil_img in pil_images]
-        images = [
-            cv2.resize(np.array(pil_img), (self.resolution, self.resolution))
-            for pil_img in pil_images
-        ]
-        return np.array(images), np.array(sizes, dtype=np.float32)
+    def __call__(self, pil_images: list[Image.Image]):
+        images_array = self.collate_images(pil_images)
+        target_sizes_array = self.collate_sizes(pil_images)
+        input_dict = {self.input_names[0]: images_array}
+        masks = self.session.run(None, input_dict)[0]
+        return self.postprocess(masks, target_sizes_array)
 
     def postprocess(self, masks: np.ndarray, target_sizes: np.ndarray):
         results: list[np.ndarray] = []
@@ -54,12 +53,6 @@ class OnnxSemanticSegmentation(OnnxSessionWrapper):
             results.append(resized_masks)
 
         return results
-
-    def __call__(self, pil_images: list[Image.Image]):
-        images_array, target_sizes_array = self.preprocess(pil_images)
-        input_dict = {self.input_names[0]: images_array}
-        masks = self.session.run(None, input_dict)[0]
-        return self.postprocess(masks, target_sizes_array)
 
 
 class SemanticSegmentationPredictor(ImagePredictor):

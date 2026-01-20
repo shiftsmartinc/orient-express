@@ -35,13 +35,19 @@ class InstanceSegmentationPrediction:
 
 
 class OnnxInstanceSegmentation(OnnxSessionWrapper):
-    def preprocess(self, pil_images: list[Image.Image]):
-        sizes = [[pil_img.size[1], pil_img.size[0]] for pil_img in pil_images]
-        images = [
-            cv2.resize(np.array(pil_img), (self.resolution, self.resolution))
-            for pil_img in pil_images
-        ]
-        return np.array(images), np.array(sizes, dtype=np.float32)
+    def __call__(self, pil_images: list[Image.Image], confidence: float = 0.5):
+        images_array = self.collate_images(pil_images)
+        target_sizes_array = self.collate_sizes(pil_images)
+
+        input_dict = {
+            self.input_names[0]: images_array,
+            self.input_names[1]: target_sizes_array,
+        }
+
+        boxes, scores, labels, masks = self.session.run(None, input_dict)
+        return self.postprocess(
+            boxes, scores, labels, masks, target_sizes_array, confidence
+        )
 
     def postprocess(
         self,
@@ -91,19 +97,6 @@ class OnnxInstanceSegmentation(OnnxSessionWrapper):
             results.append((result, resized_masks))
 
         return results
-
-    def __call__(self, pil_images: list[Image.Image], confidence: float = 0.5):
-        images_array, target_sizes_array = self.preprocess(pil_images)
-
-        input_dict = {
-            self.input_names[0]: images_array,
-            self.input_names[1]: target_sizes_array,
-        }
-
-        boxes, scores, labels, masks = self.session.run(None, input_dict)
-        return self.postprocess(
-            boxes, scores, labels, masks, target_sizes_array, confidence
-        )
 
 
 class InstanceSegmentationPredictor(ImagePredictor):
@@ -166,8 +159,8 @@ class InstanceSegmentationPredictor(ImagePredictor):
         centroid_x = int((prediction.bbox[0] + prediction.bbox[2]) / 2)
         centroid_y = int((prediction.bbox[1] + prediction.bbox[3]) / 2)
         # Put the object count in the center of the bbox
-        font_scale = 6
-        font_thickness = 12
+        font_scale = 2
+        font_thickness = 4
         text = str(index)
         text_size = cv2.getTextSize(
             text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness

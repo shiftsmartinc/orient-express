@@ -10,6 +10,7 @@ from orient_express.utils.image_processor import (
     read_image_from_gs,
     fix_rotation,
     image_to_base64,
+    base64_to_image,
 )
 from orient_express.utils.retry import retry
 from orient_express.vertex import download_artifacts, ARTIFACT_DIR
@@ -127,9 +128,18 @@ class OnnxImageModel(Model):
     @retry(retries=3)
     def download_image(self, image_address):
         if image_address.startswith("http"):
+            # http url
             image = read_image_from_url(image_address)
-        else:
+        elif image_address.startswith("gs://"):
+            # gs uri
             image = read_image_from_gs(image_address)
+        elif image_address.startswith("data:"):
+            # data URI format: data:image/png;base64,iVBORw0KGgo...
+            base64_data = image_address.split(",", 1)[1]
+            image = base64_to_image(base64_data)
+        else:
+            # raw base64
+            image = base64_to_image(image_address)
         return image
 
     def get_debug_image(self, image, preds):

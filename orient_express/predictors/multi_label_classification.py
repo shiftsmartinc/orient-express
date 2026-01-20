@@ -21,11 +21,7 @@ class MultiLabelClassificationPrediction:
 
 class OnnxMultiLabelClassifier(OnnxSessionWrapper):
     def __call__(self, pil_images: list[Image.Image]):
-        images = [
-            cv2.resize(np.array(pil_img), (self.resolution, self.resolution))
-            for pil_img in pil_images
-        ]
-        images_array = np.array(images)
+        images_array = self.collate_images(pil_images)
 
         input_dict = {self.input_names[0]: images_array}
 
