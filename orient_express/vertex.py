@@ -76,13 +76,15 @@ class VertexModel:
         predictions = self.endpoint.predict(instances=instances, parameters=parameters)
         return predictions.predictions
 
-    def get_local_predictor(self, device: str = "cpu"):
+    def get_local_predictor(self, device: str = "cpu", force_download: bool = False):
         dir = os.path.join(ARTIFACT_DIR, self.model_name + "-" + str(self.version))
-        self.download_artifacts(dir)
+        self.download_artifacts(dir, force_download=force_download)
         return get_predictor(dir, device)
 
-    def download_artifacts(self, dir: str):
-        download_artifacts(dir, self.vertex_model.gca_resource.artifact_uri)
+    def download_artifacts(self, dir: str, force_download: bool = True):
+        download_artifacts(
+            dir, self.vertex_model.gca_resource.artifact_uri, force_download
+        )
 
 
 def vertex_init(project_name: str, region: str):
@@ -92,18 +94,17 @@ def vertex_init(project_name: str, region: str):
         _vertex_initialized = True
 
 
-def download_artifacts(dir: str, artifact_uri: str):
+def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True):
     storage_client = storage.Client()
-
     bucket_name, artifact_path = artifact_uri.replace("gs://", "").split("/", 1)
     bucket = storage_client.bucket(bucket_name)
-
     os.makedirs(dir, exist_ok=True)
-
     blobs = bucket.list_blobs(prefix=artifact_path)
     for blob in blobs:
         filename = blob.name.split("/")[-1]
         download_path = os.path.join(dir, filename)
+        if not force_download and os.path.exists(download_path):
+            continue
         blob.download_to_filename(download_path)
 
 
