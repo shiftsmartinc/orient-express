@@ -1,7 +1,5 @@
 from dataclasses import dataclass
 
-import cv2
-import numpy as np
 from PIL import Image
 
 from .predictor import OnnxSessionWrapper, ImagePredictor
@@ -22,9 +20,7 @@ class MultiLabelClassificationPrediction:
 class OnnxMultiLabelClassifier(OnnxSessionWrapper):
     def __call__(self, pil_images: list[Image.Image]):
         images_array = self.collate_images(pil_images)
-
         input_dict = {self.input_names[0]: images_array}
-
         scores = self.session.run(None, input_dict)[0]
         return scores
 
