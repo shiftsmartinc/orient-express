@@ -21,6 +21,7 @@ from .multi_label_classification import (
     MultiLabelClassificationPredictor,
     MultiLabelClassificationPrediction,
 )
+from .feature_extraction import FeatureExtractionPredictor, FeaturePrediction
 
 
 def get_predictor(dir: str, device: str = "cpu"):
@@ -62,6 +63,8 @@ def get_predictor(dir: str, device: str = "cpu"):
             return load_image_predictor(
                 MultiLabelClassificationPredictor, dir, metadata, device
             )
+        elif model_type == FeatureExtractionPredictor.model_type:
+            return load_feature_extractor(dir, metadata, device)
         else:
             raise Exception(f"Unknown model_type '{model_type}'")
 
@@ -74,3 +77,8 @@ def load_image_predictor(
         raise Exception("No classes defined in metadata.yaml")
     classes = metadata["classes"]
     return model_type(onnx_path, classes, device)
+
+
+def load_feature_extractor(dir: str, metadata: dict, device: str = "cpu"):
+    onnx_path = os.path.join(dir, metadata["model_file"])
+    return FeatureExtractionPredictor(onnx_path, device)
