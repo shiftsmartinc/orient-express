@@ -13,10 +13,10 @@ pandas = "^2.0"
 pyyaml = "^6.0"
 torch = [
     {version = "^2.5.0+cpu", source = "pytorch-cpu", markers = "sys_platform == 'linux' or sys_platform == 'win32'"},
-    {version = "^2.5.0+cpu", markers = "sys_platform == 'darwin'"},
+    {version = "^2.5.0", markers = "sys_platform == 'darwin'"},
 ]
 torchvision = [
-    {version = "^0.20.0", source = "pytorch-cpu", markers = "sys_platform == 'linux' or sys_platform == 'win32'"},
+    {version = "^0.20.0+cpu", source = "pytorch-cpu", markers = "sys_platform == 'linux' or sys_platform == 'win32'"},
     {version = "^0.20.0", markers = "sys_platform == 'darwin'"},
 ]
 opencv-python-headless = "^4.11.0"

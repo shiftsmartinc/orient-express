@@ -80,8 +80,7 @@ class SemanticSegmentationPredictor(ImagePredictor):
         self, image: Image.Image, mask: np.array, mask_opacity: float = 0.3
     ) -> Image.Image:
         opencv_image = pil_to_opencv(image)
-
-        mask_overlay = np.zeros((*mask.shape, 3), dtype=np.uint8)
+        mask_overlay = opencv_image.copy()
 
         for class_id, class_name in self.classes.items():
             fill_color = self.color_scheme.get(class_name, (120, 120, 120))

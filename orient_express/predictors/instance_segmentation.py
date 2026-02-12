@@ -180,7 +180,7 @@ class InstanceSegmentationPredictor(ImagePredictor):
             font_scale = target_size / max(base_w, base_h)
 
         assert font_scale is not None
-        thickness = int(font_scale * 2)
+        thickness = min(int(font_scale * 2), 1)
 
         text_size = cv2.getTextSize(text, FONT, font_scale, thickness)[0]
 
@@ -193,7 +193,7 @@ class InstanceSegmentationPredictor(ImagePredictor):
             opencv_image,
             text,
             (text_x, text_y),
-            cv2.FONT_HERSHEY_SIMPLEX,
+            FONT,
             font_scale,
             (255, 255, 255),
             thickness,
