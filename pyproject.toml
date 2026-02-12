@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "orient_express"
-version = "2.2.0"
+version = "2.2.1"
 description = "A library to simplify model deployment to Vertex AI"
 authors = ["Alexey Zankevich <alex.zankevich@shiftsmart.com>", "Ian Myers <ian.myers@shiftsmart.com>"]
 readme = "README.md"
