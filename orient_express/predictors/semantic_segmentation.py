@@ -76,15 +76,18 @@ class SemanticSegmentationPredictor(ImagePredictor):
             )
         return outputs
 
-    def get_annotated_image(self, image: Image.Image, mask: np.array) -> Image.Image:
+    def get_annotated_image(
+        self, image: Image.Image, mask: np.array, mask_opacity: float = 0.3
+    ) -> Image.Image:
         opencv_image = pil_to_opencv(image)
-
-        mask_rgb = np.zeros((*mask.shape, 3), dtype=np.uint8)
+        mask_overlay = opencv_image.copy()
 
         for class_id, class_name in self.classes.items():
             fill_color = self.color_scheme.get(class_name, (120, 120, 120))
-            mask_rgb[mask == class_id] = fill_color[:3]
+            mask_overlay[mask == class_id] = fill_color[:3]
 
-        annotated_image = cv2.addWeighted(opencv_image, 0.7, mask_rgb, 0.3, 0)
+        annotated_image = cv2.addWeighted(
+            mask_overlay, mask_opacity, opencv_image, 1 - mask_opacity, 0
+        )
 
         return opencv_to_pil(annotated_image)

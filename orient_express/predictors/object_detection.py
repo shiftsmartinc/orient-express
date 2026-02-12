@@ -117,7 +117,10 @@ class BoundingBoxPredictor(ImagePredictor):
         return outputs
 
     def get_annotated_image(
-        self, image: Image.Image, predictions: list[BoundingBoxPrediction]
+        self,
+        image: Image.Image,
+        predictions: list[BoundingBoxPrediction],
+        line_width: int = 8,
     ):
         opencv_image = pil_to_opencv(image)
 
@@ -125,6 +128,8 @@ class BoundingBoxPredictor(ImagePredictor):
             color = self.color_scheme.get(pred.clss, (255, 255, 255))
             x1, y1, x2, y2 = pred.bbox
             x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-            opencv_image = cv2.rectangle(opencv_image, (x1, y1), (x2, y2), color, 2)
+            opencv_image = cv2.rectangle(
+                opencv_image, (x1, y1), (x2, y2), color, line_width
+            )
 
         return opencv_to_pil(opencv_image)
