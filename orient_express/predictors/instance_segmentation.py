@@ -10,6 +10,8 @@ import torch.nn.functional as F
 from .predictor import OnnxSessionWrapper, ImagePredictor
 from ..utils.image_processor import pil_to_opencv, opencv_to_pil
 
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+
 
 @dataclass
 class InstanceSegmentationPrediction:
@@ -128,7 +130,12 @@ class InstanceSegmentationPredictor(ImagePredictor):
         return outputs
 
     def get_annotated_image(
-        self, image: Image.Image, predictions: list[InstanceSegmentationPrediction]
+        self,
+        image: Image.Image,
+        predictions: list[InstanceSegmentationPrediction],
+        mask_opacity: float = 0.3,
+        draw_indices: bool = True,
+        font_scale: float | None = None,
     ) -> Image.Image:
         opencv_image = pil_to_opencv(image)
         mask_overlay = opencv_image.copy()
@@ -137,15 +144,20 @@ class InstanceSegmentationPredictor(ImagePredictor):
             fill_color = self.color_scheme.get(pred.clss, (120, 120, 120))
             mask_overlay[pred.mask] = fill_color[:3]
 
-        alpha = 0.5
         annotated_image = cv2.addWeighted(
-            mask_overlay, alpha, opencv_image, 1 - alpha, 0
+            mask_overlay, mask_opacity, opencv_image, 1 - mask_opacity, 0
         )
 
-        class_counts = defaultdict(int)
-        for pred in predictions:
-            class_counts[pred.clss] += 1
-            self.draw_mask_index(annotated_image, pred, class_counts[pred.clss])
+        if draw_indices:
+            class_counts = defaultdict(int)
+            for pred in predictions:
+                class_counts[pred.clss] += 1
+                self.draw_mask_index(
+                    annotated_image,
+                    pred,
+                    class_counts[pred.clss],
+                    font_scale,
+                )
 
         return opencv_to_pil(annotated_image)
 
@@ -154,19 +166,29 @@ class InstanceSegmentationPredictor(ImagePredictor):
         opencv_image: np.ndarray,
         prediction: InstanceSegmentationPrediction,
         index: int,
+        font_scale: float | None = None,
     ):
-        # Calculate the centroid of the bbox
-        centroid_x = int((prediction.bbox[0] + prediction.bbox[2]) / 2)
-        centroid_y = int((prediction.bbox[1] + prediction.bbox[3]) / 2)
-        # Put the object count in the center of the bbox
-        font_scale = 2
-        font_thickness = 4
         text = str(index)
-        text_size = cv2.getTextSize(
-            text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness
-        )[0]
+
+        bbox = prediction.bbox
+        bbox_width = bbox[2] - bbox[0]
+        bbox_height = bbox[3] - bbox[1]
+
+        if font_scale is None:
+            target_size = min(bbox_width, bbox_height) * 0.3
+            (base_w, base_h), _ = cv2.getTextSize(text, FONT, 1, 1)
+            font_scale = target_size / max(base_w, base_h)
+
+        assert font_scale is not None
+        thickness = int(font_scale * 2)
+
+        text_size = cv2.getTextSize(text, FONT, font_scale, thickness)[0]
+
+        centroid_x = int((bbox[0] + bbox[2]) / 2)
+        centroid_y = int((bbox[1] + bbox[3]) / 2)
         text_x = int(centroid_x - text_size[0] / 2)
         text_y = int(centroid_y + text_size[1] / 2)
+
         cv2.putText(
             opencv_image,
             text,
@@ -174,5 +196,5 @@ class InstanceSegmentationPredictor(ImagePredictor):
             cv2.FONT_HERSHEY_SIMPLEX,
             font_scale,
             (255, 255, 255),
-            font_thickness,
+            thickness,
         )

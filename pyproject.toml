@@ -11,8 +11,14 @@ google-cloud-aiplatform = "^1.0"
 google-cloud-storage = "^3.0"
 pandas = "^2.0"
 pyyaml = "^6.0"
-torch = {version = "^2.5.0", source = "pytorch-cpu"}
-torchvision = {version = "^0.20.0", source = "pytorch-cpu"}
+torch = [
+    {version = "^2.5.0+cpu", source = "pytorch-cpu", markers = "sys_platform == 'linux' or sys_platform == 'win32'"},
+    {version = "^2.5.0+cpu", markers = "sys_platform == 'darwin'"},
+]
+torchvision = [
+    {version = "^0.20.0", source = "pytorch-cpu", markers = "sys_platform == 'linux' or sys_platform == 'win32'"},
+    {version = "^0.20.0", markers = "sys_platform == 'darwin'"},
+]
 opencv-python-headless = "^4.11.0"
 Pillow = ">=10.0.1"
 gcsfs = "^2024.10.0"
