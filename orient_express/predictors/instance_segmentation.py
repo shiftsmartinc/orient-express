@@ -180,7 +180,7 @@ class InstanceSegmentationPredictor(ImagePredictor):
             font_scale = target_size / max(base_w, base_h)
 
         assert font_scale is not None
-        thickness = min(int(font_scale * 2), 1)
+        thickness = max(int(font_scale * 2), 1)
 
         text_size = cv2.getTextSize(text, FONT, font_scale, thickness)[0]
 
