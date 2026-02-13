@@ -9,11 +9,14 @@ These tests verify that:
 5. Annotation methods modify images correctly in expected regions
 """
 
+import os
+
 import pytest
 import numpy as np
 from PIL import Image
 from unittest.mock import MagicMock, patch
 
+from orient_express.predictors import load_vector_index
 from orient_express.predictors.classification import (
     ClassificationPredictor,
     ClassificationPrediction,
@@ -33,6 +36,12 @@ from orient_express.predictors.instance_segmentation import (
 from orient_express.predictors.semantic_segmentation import (
     SemanticSegmentationPredictor,
     SemanticSegmentationPrediction,
+)
+from orient_express.predictors.vector_index import (
+    VectorIndex,
+    SearchResult,
+    CropSpec,
+    build_vector_index,
 )
 
 # -----------------------------------------------------------------------------
@@ -1123,3 +1132,281 @@ class TestSemanticSegmentationPredictor:
             assert 170 <= bottom_pixel[0] <= 185
             assert bottom_pixel[1] == 255
             assert 170 <= bottom_pixel[2] <= 185
+
+
+# -----------------------------------------------------------------------------
+# VectorIndex Tests
+# -----------------------------------------------------------------------------
+
+
+class TestVectorIndex:
+    """Tests for VectorIndex construction, search, aggregation, and serialization."""
+
+    @pytest.fixture
+    def normalized_vectors(self):
+        np.random.seed(42)
+        raw = np.random.randn(6, 64).astype(np.float32)
+        return raw / np.linalg.norm(raw, axis=1, keepdims=True)
+
+    @pytest.fixture
+    def single_label_index(self, normalized_vectors):
+        labels = [["A"], ["A"], ["A"], ["B"], ["B"], ["B"]]
+        return VectorIndex(vectors=normalized_vectors, labels=labels)
+
+    @pytest.fixture
+    def multi_label_index(self, normalized_vectors):
+        labels = [["A"], ["A"], ["A", "C"], ["B", "C"], ["B"], ["B"]]
+        return VectorIndex(vectors=normalized_vectors, labels=labels)
+
+    def test_construction_valid(self, normalized_vectors):
+        labels = [["x"] for _ in range(6)]
+        index = VectorIndex(vectors=normalized_vectors, labels=labels)
+        assert len(index) == 6
+        assert index.dim == 64
+
+    def test_construction_rejects_1d_vectors(self):
+        with pytest.raises(ValueError, match="2-dimensional"):
+            VectorIndex(vectors=np.array([1.0, 2.0, 3.0]), labels=[["a"]])
+
+    def test_construction_rejects_mismatched_lengths(self, normalized_vectors):
+        with pytest.raises(ValueError, match="labels length"):
+            VectorIndex(vectors=normalized_vectors, labels=[["a"], ["b"]])
+
+    def test_construction_normalize(self):
+        raw = np.array([[3.0, 4.0], [0.0, 5.0]], dtype=np.float32)
+        index = VectorIndex(vectors=raw, labels=[["a"], ["b"]], normalize=True)
+        norms = np.linalg.norm(index.vectors, axis=1)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-6)
+
+    def test_construction_normalize_zero_vector(self):
+        raw = np.array([[0.0, 0.0], [3.0, 4.0]], dtype=np.float32)
+        index = VectorIndex(vectors=raw, labels=[["a"], ["b"]], normalize=True)
+        np.testing.assert_array_equal(index.vectors[0], [0.0, 0.0])
+        np.testing.assert_allclose(np.linalg.norm(index.vectors[1]), 1.0, atol=1e-6)
+
+    def test_repr(self, multi_label_index):
+        r = repr(multi_label_index)
+        assert "6 vectors" in r
+        assert "dim=64" in r
+        assert "3 unique labels" in r
+
+    # -- Search ---------------------------------------------------------------
+
+    def test_search_self_is_top_match(self, single_label_index, normalized_vectors):
+        results = single_label_index.search(normalized_vectors[0], k=1)
+        assert len(results) == 1
+        assert results[0].score == pytest.approx(1.0, abs=1e-5)
+        assert results[0].labels == ["A"]
+
+    def test_search_k_larger_than_index(self, single_label_index, normalized_vectors):
+        results = single_label_index.search(normalized_vectors[0], k=100)
+        assert len(results) == 6
+
+    def test_search_returns_descending_scores(
+        self, single_label_index, normalized_vectors
+    ):
+        results = single_label_index.search(normalized_vectors[0], k=6)
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_search_multi_label_preserves_labels(
+        self, multi_label_index, normalized_vectors
+    ):
+        results = multi_label_index.search(normalized_vectors[2], k=1)
+        assert results[0].labels == ["A", "C"]
+
+    def test_search_1d_and_2d_query_equivalent(
+        self, single_label_index, normalized_vectors
+    ):
+        query = normalized_vectors[0]
+        results_1d = single_label_index.search(query, k=3)
+        results_2d = single_label_index.search(query.reshape(1, -1), k=3)
+        for r1, r2 in zip(results_1d, results_2d):
+            assert r1.score == pytest.approx(r2.score)
+            assert r1.labels == r2.labels
+
+    def test_search_batch(self, single_label_index, normalized_vectors):
+        queries = normalized_vectors[:2]
+        batch_results = single_label_index.search_batch(queries, k=2)
+        assert len(batch_results) == 2
+        assert len(batch_results[0]) == 2
+        assert len(batch_results[1]) == 2
+        assert batch_results[0][0].score == pytest.approx(1.0, abs=1e-5)
+        assert batch_results[1][0].score == pytest.approx(1.0, abs=1e-5)
+
+    # -- Aggregation ----------------------------------------------------------
+
+    def test_aggregate_single_label(self, single_label_index):
+        agg = single_label_index.aggregate()
+        assert len(agg) == 2
+        assert agg.labels == [["A"], ["B"]]
+        norms = np.linalg.norm(agg.vectors, axis=1)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-6)
+
+    def test_aggregate_multi_label(self, multi_label_index):
+        agg = multi_label_index.aggregate()
+        assert len(agg) == 3
+        assert agg.labels == [["A"], ["B"], ["C"]]
+        norms = np.linalg.norm(agg.vectors, axis=1)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-6)
+
+    def test_aggregate_multi_label_centroid_correctness(
+        self, multi_label_index, normalized_vectors
+    ):
+        """Label C appears on vectors 2 and 3. Its centroid should be the
+        normalized mean of those two vectors."""
+        agg = multi_label_index.aggregate()
+        c_index = agg.labels.index(["C"])
+        expected = normalized_vectors[2] + normalized_vectors[3]
+        expected = expected / np.linalg.norm(expected)
+        np.testing.assert_allclose(agg.vectors[c_index], expected, atol=1e-5)
+
+    def test_aggregate_already_unique(self, normalized_vectors):
+        labels = [["a"], ["b"], ["c"], ["d"], ["e"], ["f"]]
+        index = VectorIndex(vectors=normalized_vectors, labels=labels)
+        agg = index.aggregate()
+        assert len(agg) == 6
+        np.testing.assert_allclose(agg.vectors, normalized_vectors, atol=1e-6)
+
+    # -- Dump / Load ----------------------------------------------------------
+
+    def test_dump_and_load_roundtrip(self, single_label_index, tmp_path):
+        single_label_index.dump(str(tmp_path))
+        loaded = load_vector_index(str(tmp_path))
+        assert len(loaded) == len(single_label_index)
+        assert loaded.labels == single_label_index.labels
+        np.testing.assert_allclose(loaded.vectors, single_label_index.vectors)
+
+    def test_dump_and_load_multi_label_roundtrip(self, multi_label_index, tmp_path):
+        multi_label_index.dump(str(tmp_path))
+        loaded = load_vector_index(str(tmp_path))
+        assert loaded.labels == multi_label_index.labels
+        np.testing.assert_allclose(loaded.vectors, multi_label_index.vectors)
+
+    def test_dump_creates_expected_files(self, single_label_index, tmp_path):
+        files = single_label_index.dump(str(tmp_path))
+        assert len(files) == 2
+        assert all(os.path.exists(f) for f in files)
+        assert any(f.endswith(".yaml") for f in files)
+        assert any(f.endswith(".npz") for f in files)
+
+
+# -----------------------------------------------------------------------------
+# build_vector_index Tests
+# -----------------------------------------------------------------------------
+
+
+class TestBuildVectorIndex:
+    """Tests for the build_vector_index factory function."""
+
+    @pytest.fixture
+    def mock_feature_extractor(self):
+        extractor = MagicMock()
+
+        def fake_predict(images):
+            results = []
+            for _ in images:
+                mock_result = MagicMock()
+                mock_result.feature = np.random.randn(64).astype(np.float32)
+                results.append(mock_result)
+            return results
+
+        extractor.predict.side_effect = fake_predict
+        return extractor
+
+    def test_build_single_label(self, mock_feature_extractor):
+        crops = [
+            Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)) for _ in range(4)
+        ]
+        labels = ["A", "A", "B", "B"]
+        index = build_vector_index(crops, labels, mock_feature_extractor)
+        assert len(index) == 4
+        assert index.labels == [["A"], ["A"], ["B"], ["B"]]
+
+    def test_build_multi_label(self, mock_feature_extractor):
+        crops = [
+            Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)) for _ in range(3)
+        ]
+        labels = [["A", "B"], ["B"], ["C"]]
+        index = build_vector_index(
+            crops, labels, mock_feature_extractor, multi_label=True
+        )
+        assert len(index) == 3
+        assert index.labels == [["A", "B"], ["B"], ["C"]]
+
+    def test_build_from_file_paths(self, mock_feature_extractor, tmp_path):
+        paths = []
+        for i in range(3):
+            p = tmp_path / f"crop_{i}.png"
+            Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(str(p))
+            paths.append(str(p))
+        labels = ["A", "B", "C"]
+        index = build_vector_index(paths, labels, mock_feature_extractor)
+        assert len(index) == 3
+
+    def test_build_rejects_mismatched_lengths(self, mock_feature_extractor):
+        crops = [Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8))]
+        with pytest.raises(ValueError, match="crops length"):
+            build_vector_index(crops, ["A", "B"], mock_feature_extractor)
+
+    def test_build_rejects_bad_crop_type(self, mock_feature_extractor):
+        with pytest.raises(
+            TypeError, match="PIL Image, a file path string, or a CropSpec"
+        ):
+            build_vector_index([12345], ["A"], mock_feature_extractor)
+
+    def test_build_batching(self, mock_feature_extractor):
+        crops = [
+            Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)) for _ in range(5)
+        ]
+        labels = ["A"] * 5
+        build_vector_index(crops, labels, mock_feature_extractor, batch_size=2)
+        assert mock_feature_extractor.predict.call_count == 3  # 2 + 2 + 1
+
+    def test_build_normalizes_by_default(self, mock_feature_extractor):
+        crops = [
+            Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)) for _ in range(3)
+        ]
+        labels = ["A", "B", "C"]
+        index = build_vector_index(crops, labels, mock_feature_extractor)
+        norms = np.linalg.norm(index.vectors, axis=1)
+        np.testing.assert_allclose(norms, 1.0, atol=1e-5)
+
+    def test_build_from_crop_specs(self, mock_feature_extractor, tmp_path):
+        img = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8))
+        p = tmp_path / "full_image.png"
+        img.save(str(p))
+        specs = [
+            CropSpec(path=str(p), bbox=(0, 0, 50, 50)),
+            CropSpec(path=str(p), bbox=(50, 50, 100, 100)),
+        ]
+        index = build_vector_index(specs, ["A", "B"], mock_feature_extractor)
+        assert len(index) == 2
+
+    def test_build_mixed_crop_types(self, mock_feature_extractor, tmp_path):
+        img = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8))
+        p = tmp_path / "image.png"
+        img.save(str(p))
+        crops = [
+            img,
+            str(p),
+            CropSpec(path=str(p), bbox=(10, 10, 50, 50)),
+        ]
+        index = build_vector_index(crops, ["A", "B", "C"], mock_feature_extractor)
+        assert len(index) == 3
+
+    def test_crop_spec_crops_correctly(self, tmp_path):
+        """Verify CropSpec actually crops to the specified bbox."""
+        arr = np.zeros((100, 100, 3), dtype=np.uint8)
+        arr[20:40, 30:60] = [255, 0, 0]
+        img = Image.fromarray(arr)
+        p = tmp_path / "image.png"
+        img.save(str(p))
+
+        from orient_express.predictors.vector_index import _CropDataset
+
+        dataset = _CropDataset([CropSpec(path=str(p), bbox=(30, 20, 60, 40))])
+        crop = dataset[0]
+        crop_arr = np.array(crop)
+        assert crop.size == (30, 20)
+        assert np.all(crop_arr[:, :, 0] == 255)

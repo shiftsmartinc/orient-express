@@ -493,6 +493,69 @@ annotated_image = predictor.get_annotated_image(image, predictions[0].class_mask
 
 </details>
 
+### VectorIndex
+
+<details>
+<summary>Click to expand</summary>
+
+A cosine-similarity vector index for matching feature vectors to labels. Each vector in the index can have one or more labels. VectorIndex integrates with `get_predictor` for loading from saved artifacts, and can be built from scratch using a feature extractor.
+
+#### Usage
+
+```python
+from orient_express.predictors import VectorIndex, build_vector_index
+
+# Build from crops and labels using a feature extractor
+index = build_vector_index(
+    crops=crop_images,           # list of PIL Images or file paths
+    labels=cluster_ids,          # one label per crop
+    feature_extractor=fe,        # FeatureExtractionPredictor
+    num_workers=8,               # parallel image loading
+)
+
+# Aggregate to one centroid per label
+centroid_index = index.aggregate()
+
+# Save and load
+centroid_index.dump("/path/to/artifact_dir")
+
+from orient_express.predictors import get_predictor
+loaded_index = get_predictor("/path/to/artifact_dir")
+
+# Search
+results = loaded_index.search(query_vector, k=5)
+for result in results:
+    print(result.labels, result.score)
+
+# Batch search
+batch_results = loaded_index.search_batch(query_matrix, k=5)
+```
+
+#### Multi-label support
+
+Vectors can have multiple labels. This is useful when a single visual cluster maps to multiple SKUs:
+
+```python
+index = VectorIndex(
+    vectors=feature_matrix,
+    labels=[["sku_101", "sku_102"], ["sku_103"], ["sku_104", "sku_105"]],
+)
+
+# aggregate() computes one centroid per unique label
+aggregated = index.aggregate()  # 5 vectors, one per SKU
+```
+
+#### Output Structure
+
+```python
+@dataclass
+class SearchResult:
+    labels: list   # All labels for the matched vector
+    score: float   # Cosine similarity score
+```
+
+</details>
+
 ---
 
 ## Color Schemes

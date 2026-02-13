@@ -1,8 +1,10 @@
 import os
 import logging
+import json
 
 import joblib
 import yaml
+import numpy as np
 
 from ..utils.paths import get_metadata_path
 
@@ -22,6 +24,7 @@ from .multi_label_classification import (
     MultiLabelClassificationPrediction,
 )
 from .feature_extraction import FeatureExtractionPredictor, FeaturePrediction
+from .vector_index import VectorIndex, SearchResult, CropSpec, build_vector_index
 
 
 def get_predictor(dir: str, device: str = "cpu"):
@@ -65,6 +68,8 @@ def get_predictor(dir: str, device: str = "cpu"):
             )
         elif model_type == FeatureExtractionPredictor.model_type:
             return load_feature_extractor(dir, metadata, device)
+        elif model_type == VectorIndex.model_type:
+            return load_vector_index(dir, metadata)
         else:
             raise Exception(f"Unknown model_type '{model_type}'")
 
@@ -82,3 +87,18 @@ def load_image_predictor(
 def load_feature_extractor(dir: str, metadata: dict, device: str = "cpu"):
     onnx_path = os.path.join(dir, metadata["model_file"])
     return FeatureExtractionPredictor(onnx_path, device)
+
+
+def load_vector_index(dir: str, metadata: dict | None = None):
+    if metadata is None:
+        metadata_path = get_metadata_path(dir)
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+    assert metadata is not None
+    artifact_path = os.path.join(dir, metadata["model_file"])
+    data = np.load(artifact_path, allow_pickle=False)
+    vectors = data["vectors"]
+    labels = json.loads(str(data["labels_json"]))
+    index = VectorIndex(vectors=vectors, labels=labels)
+    index.model_path = artifact_path
+    return index
