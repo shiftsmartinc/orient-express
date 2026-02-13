@@ -18,6 +18,7 @@ Pillow = ">=10.0.1"
 gcsfs = "^2024.10.0"
 scikit-learn = "^1.5.0"
 xgboost = "^2.0.0"
+tqdm = ">=4.67.1"
 onnxruntime-gpu = {version = "^1.20", markers = "sys_platform == 'linux' and platform_machine == 'x86_64' or sys_platform == 'win32' and platform_machine == 'AMD64'"}
 onnxruntime = {version = "^1.20", markers = "sys_platform == 'darwin' or platform_machine == 'aarch64' or platform_machine == 'arm64' or sys_platform == 'win32' and platform_machine == 'ARM64'"}
 
