@@ -24,7 +24,7 @@ from .multi_label_classification import (
     MultiLabelClassificationPrediction,
 )
 from .feature_extraction import FeatureExtractionPredictor, FeaturePrediction
-from .vector_index import VectorIndex, SearchResult, build_vector_index
+from .vector_index import VectorIndex, SearchResult, CropSpec, build_vector_index
 
 
 def get_predictor(dir: str, device: str = "cpu"):
@@ -69,7 +69,7 @@ def get_predictor(dir: str, device: str = "cpu"):
         elif model_type == FeatureExtractionPredictor.model_type:
             return load_feature_extractor(dir, metadata, device)
         elif model_type == VectorIndex.model_type:
-            return VectorIndex.load(dir)
+            return load_vector_index(dir, metadata)
         else:
             raise Exception(f"Unknown model_type '{model_type}'")
 

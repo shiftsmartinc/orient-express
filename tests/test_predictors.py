@@ -15,7 +15,9 @@ import pytest
 import numpy as np
 from PIL import Image
 from unittest.mock import MagicMock, patch
+import yaml
 
+from orient_express.predictors import load_vector_index
 from orient_express.predictors.classification import (
     ClassificationPredictor,
     ClassificationPrediction,
@@ -39,6 +41,7 @@ from orient_express.predictors.semantic_segmentation import (
 from orient_express.predictors.vector_index import (
     VectorIndex,
     SearchResult,
+    CropSpec,
     build_vector_index,
 )
 
@@ -1270,14 +1273,16 @@ class TestVectorIndex:
 
     def test_dump_and_load_roundtrip(self, single_label_index, tmp_path):
         single_label_index.dump(str(tmp_path))
-        loaded = VectorIndex.load(str(tmp_path))
+        metadata = yaml.safe_load(open(tmp_path / "metadata.yaml"))
+        loaded = load_vector_index(str(tmp_path), metadata)
         assert len(loaded) == len(single_label_index)
         assert loaded.labels == single_label_index.labels
         np.testing.assert_allclose(loaded.vectors, single_label_index.vectors)
 
     def test_dump_and_load_multi_label_roundtrip(self, multi_label_index, tmp_path):
         multi_label_index.dump(str(tmp_path))
-        loaded = VectorIndex.load(str(tmp_path))
+        metadata = yaml.safe_load(open(tmp_path / "metadata.yaml"))
+        loaded = load_vector_index(str(tmp_path), metadata)
         assert loaded.labels == multi_label_index.labels
         np.testing.assert_allclose(loaded.vectors, multi_label_index.vectors)
 
@@ -1348,7 +1353,9 @@ class TestBuildVectorIndex:
             build_vector_index(crops, ["A", "B"], mock_feature_extractor)
 
     def test_build_rejects_bad_crop_type(self, mock_feature_extractor):
-        with pytest.raises(TypeError, match="PIL Image or a file path"):
+        with pytest.raises(
+            TypeError, match="PIL Image, a file path string, or a CropSpec"
+        ):
             build_vector_index([12345], ["A"], mock_feature_extractor)
 
     def test_build_batching(self, mock_feature_extractor):
@@ -1369,3 +1376,42 @@ class TestBuildVectorIndex:
         )
         norms = np.linalg.norm(index.vectors, axis=1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-5)
+
+    def test_build_from_crop_specs(self, mock_feature_extractor, tmp_path):
+        img = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8))
+        p = tmp_path / "full_image.png"
+        img.save(str(p))
+        specs = [
+            CropSpec(path=str(p), bbox=(0, 0, 50, 50)),
+            CropSpec(path=str(p), bbox=(50, 50, 100, 100)),
+        ]
+        index = build_vector_index(specs, ["A", "B"], mock_feature_extractor)
+        assert len(index) == 2
+
+    def test_build_mixed_crop_types(self, mock_feature_extractor, tmp_path):
+        img = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8))
+        p = tmp_path / "image.png"
+        img.save(str(p))
+        crops = [
+            img,
+            str(p),
+            CropSpec(path=str(p), bbox=(10, 10, 50, 50)),
+        ]
+        index = build_vector_index(crops, ["A", "B", "C"], mock_feature_extractor)
+        assert len(index) == 3
+
+    def test_crop_spec_crops_correctly(self, tmp_path):
+        """Verify CropSpec actually crops to the specified bbox."""
+        arr = np.zeros((100, 100, 3), dtype=np.uint8)
+        arr[20:40, 30:60] = [255, 0, 0]
+        img = Image.fromarray(arr)
+        p = tmp_path / "image.png"
+        img.save(str(p))
+
+        from orient_express.predictors.vector_index import _CropDataset
+
+        dataset = _CropDataset([CropSpec(path=str(p), bbox=(30, 20, 60, 40))])
+        crop = dataset[0]
+        crop_arr = np.array(crop)
+        assert crop.size == (30, 20)
+        assert np.all(crop_arr[:, :, 0] == 255)

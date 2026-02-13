@@ -18,6 +18,17 @@ class SearchResult:
     score: float
 
 
+@dataclass
+class CropSpec:
+    """An image path with a bounding box to crop before feature extraction.
+
+    bbox is (x1, y1, x2, y2) in pixel coordinates, as expected by PIL.Image.crop.
+    """
+
+    path: str
+    bbox: tuple[int, int, int, int]
+
+
 class VectorIndex(Predictor):
     model_type = "vector-index"
     ARTIFACT_FILENAME = "vectors.npz"
@@ -44,52 +55,6 @@ class VectorIndex(Predictor):
         self.vectors = vectors
         self.labels = labels
         self.model_path = None
-
-    def get_serving_container_image_uri(self) -> str:
-        warnings.warn(
-            "VectorIndex does not support serving via a container. Returning incompatible image URI."
-        )
-        return "us-west1-docker.pkg.dev/shiftsmartinc/orient-express/image-onnx:v2.1.2"
-
-    def get_serving_container_health_route(self, model_name) -> str:
-        return f"/v1/models/{model_name}"
-
-    def get_serving_container_predict_route(self, model_name) -> str:
-        return f"/v1/models/{model_name}:predict"
-
-    def dump(self, dir: str) -> list[str]:
-        artifact_path = os.path.join(dir, self.ARTIFACT_FILENAME)
-        np.savez(
-            artifact_path,
-            vectors=self.vectors,
-            labels_json=json.dumps(self.labels),
-        )
-
-        metadata = {
-            "model_type": self.model_type,
-            "model_file": self.ARTIFACT_FILENAME,
-        }
-        metadata_path = get_metadata_path(dir)
-        with open(metadata_path, "w") as f:
-            yaml.dump(metadata, f)
-
-        return [metadata_path, artifact_path]
-
-    @classmethod
-    def load(cls, dir: str) -> "VectorIndex":
-        metadata_path = get_metadata_path(dir)
-        with open(metadata_path) as f:
-            metadata = yaml.safe_load(f)
-
-        artifact_path = os.path.join(dir, metadata["model_file"])
-        data = np.load(artifact_path, allow_pickle=False)
-
-        vectors = data["vectors"]
-        labels = json.loads(str(data["labels_json"]))
-
-        index = cls(vectors=vectors, labels=labels)
-        index.model_path = artifact_path
-        return index
 
     def search(self, query: np.ndarray, k: int = 1) -> list[SearchResult]:
         query = query.reshape(1, -1)
@@ -147,6 +112,36 @@ class VectorIndex(Predictor):
         new_labels = [[label] for label in unique_labels]
         return VectorIndex(vectors=centroids, labels=new_labels)
 
+    def get_serving_container_image_uri(self) -> str:
+        warnings.warn(
+            "VectorIndex does not support serving via a container. Returning incompatible image URI."
+        )
+        return "us-west1-docker.pkg.dev/shiftsmartinc/orient-express/image-onnx:v2.1.2"
+
+    def get_serving_container_health_route(self, model_name) -> str:
+        return f"/v1/models/{model_name}"
+
+    def get_serving_container_predict_route(self, model_name) -> str:
+        return f"/v1/models/{model_name}:predict"
+
+    def dump(self, dir: str) -> list[str]:
+        artifact_path = os.path.join(dir, self.ARTIFACT_FILENAME)
+        np.savez(
+            artifact_path,
+            vectors=self.vectors,
+            labels_json=json.dumps(self.labels),
+        )
+
+        metadata = {
+            "model_type": self.model_type,
+            "model_file": self.ARTIFACT_FILENAME,
+        }
+        metadata_path = get_metadata_path(dir)
+        with open(metadata_path, "w") as f:
+            yaml.dump(metadata, f)
+
+        return [metadata_path, artifact_path]
+
     @property
     def dim(self) -> int:
         return self.vectors.shape[1]
@@ -165,7 +160,7 @@ class VectorIndex(Predictor):
 
 
 class _CropDataset:
-    def __init__(self, crops: list[Image.Image | str]):
+    def __init__(self, crops: list[Image.Image | str | CropSpec]):
         self.crops = crops
 
     def __len__(self):
@@ -173,12 +168,15 @@ class _CropDataset:
 
     def __getitem__(self, idx):
         crop = self.crops[idx]
+        if isinstance(crop, CropSpec):
+            img = Image.open(crop.path).convert("RGB")
+            return img.crop(crop.bbox)
         if isinstance(crop, str):
             return Image.open(crop).convert("RGB")
-        elif isinstance(crop, Image.Image):
+        if isinstance(crop, Image.Image):
             return crop
         raise TypeError(
-            f"Each crop must be a PIL Image or a file path string, got {type(crop)}"
+            f"Each crop must be a PIL Image, a file path string, or a CropSpec, got {type(crop)}"
         )
 
 
@@ -187,7 +185,7 @@ def _collate_pil(batch):
 
 
 def build_vector_index(
-    crops: list[Image.Image | str],
+    crops: list[Image.Image | str | CropSpec],
     labels: list,
     feature_extractor,
     batch_size: int = 128,
@@ -195,6 +193,22 @@ def build_vector_index(
     multi_label: bool = False,
     num_workers: int = 0,
 ) -> VectorIndex:
+    """Build a VectorIndex by extracting features from crops.
+
+    Args:
+        crops: images to extract features from. Each element can be a PIL
+            Image (used directly), a file path string (loaded as a whole
+            image), or a CropSpec (loaded and cropped to the specified bbox).
+        labels: one label per crop. If multi_label is False, each element is a
+            single label. If multi_label is True, each element should be a list
+            of labels.
+        feature_extractor: anything with a .predict(list[Image]) method that
+            returns objects with a .feature attribute (e.g. FeatureExtractionPredictor).
+        batch_size: number of crops to process at once.
+        normalize: whether to L2-normalize the resulting feature vectors.
+        multi_label: if True, labels are already lists of labels per crop.
+        num_workers: number of DataLoader workers for parallel image loading.
+    """
     if len(crops) != len(labels):
         raise ValueError(
             f"crops length ({len(crops)}) must match labels length ({len(labels)})"
