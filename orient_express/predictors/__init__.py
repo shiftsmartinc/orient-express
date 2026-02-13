@@ -89,7 +89,12 @@ def load_feature_extractor(dir: str, metadata: dict, device: str = "cpu"):
     return FeatureExtractionPredictor(onnx_path, device)
 
 
-def load_vector_index(dir: str, metadata: dict):
+def load_vector_index(dir: str, metadata: dict | None = None):
+    if metadata is None:
+        metadata_path = get_metadata_path(dir)
+        with open(metadata_path) as f:
+            metadata = yaml.safe_load(f)
+    assert metadata is not None
     artifact_path = os.path.join(dir, metadata["model_file"])
     data = np.load(artifact_path, allow_pickle=False)
     vectors = data["vectors"]

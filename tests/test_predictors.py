@@ -15,7 +15,6 @@ import pytest
 import numpy as np
 from PIL import Image
 from unittest.mock import MagicMock, patch
-import yaml
 
 from orient_express.predictors import load_vector_index
 from orient_express.predictors.classification import (
@@ -1273,16 +1272,14 @@ class TestVectorIndex:
 
     def test_dump_and_load_roundtrip(self, single_label_index, tmp_path):
         single_label_index.dump(str(tmp_path))
-        metadata = yaml.safe_load(open(tmp_path / "metadata.yaml"))
-        loaded = load_vector_index(str(tmp_path), metadata)
+        loaded = load_vector_index(str(tmp_path))
         assert len(loaded) == len(single_label_index)
         assert loaded.labels == single_label_index.labels
         np.testing.assert_allclose(loaded.vectors, single_label_index.vectors)
 
     def test_dump_and_load_multi_label_roundtrip(self, multi_label_index, tmp_path):
         multi_label_index.dump(str(tmp_path))
-        metadata = yaml.safe_load(open(tmp_path / "metadata.yaml"))
-        loaded = load_vector_index(str(tmp_path), metadata)
+        loaded = load_vector_index(str(tmp_path))
         assert loaded.labels == multi_label_index.labels
         np.testing.assert_allclose(loaded.vectors, multi_label_index.vectors)
 
