@@ -1368,9 +1368,7 @@ class TestBuildVectorIndex:
             Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)) for _ in range(3)
         ]
         labels = ["A", "B", "C"]
-        index = build_vector_index(
-            crops, labels, mock_feature_extractor, normalize=True
-        )
+        index = build_vector_index(crops, labels, mock_feature_extractor)
         norms = np.linalg.norm(index.vectors, axis=1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-5)
 
