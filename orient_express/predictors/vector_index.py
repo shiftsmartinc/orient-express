@@ -7,6 +7,7 @@ import yaml
 import numpy as np
 from PIL import Image
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from .predictor import Predictor
 from ..utils.paths import get_metadata_path
@@ -227,7 +228,7 @@ def build_vector_index(
     )
 
     all_features = []
-    for batch in loader:
+    for batch in tqdm(loader):
         results = feature_extractor.predict(batch)
         all_features.extend([r.feature for r in results])
 
