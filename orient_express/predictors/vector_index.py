@@ -127,7 +127,7 @@ class VectorIndex(Predictor):
         warnings.warn(
             "VectorIndex does not support serving via a container. Returning incompatible image URI."
         )
-        return "us-west1-docker.pkg.dev/shiftsmartinc/orient-express/image-onnx:v2.1.2"
+        return "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:v2.1.2"
 
     def get_serving_container_health_route(self, model_name) -> str:
         return f"/v1/models/{model_name}"
