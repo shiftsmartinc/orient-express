@@ -49,6 +49,22 @@ from orient_express.predictors.vector_index import (
 # -----------------------------------------------------------------------------
 
 
+def _assert_labels_match(agg, expected_labels):
+    """Assert aggregated labels match expected, ignoring order."""
+    actual = [tuple(sorted(g)) for g in agg.labels]
+    expected = [tuple(sorted(g)) for g in expected_labels]
+    assert sorted(actual) == sorted(expected)
+
+
+def _get_centroid_for(agg, label_group):
+    """Look up the centroid vector for a given label group."""
+    key = tuple(sorted(label_group))
+    for i, g in enumerate(agg.labels):
+        if tuple(sorted(g)) == key:
+            return agg.vectors[i]
+    raise ValueError(f"Label group {label_group} not found in {agg.labels}")
+
+
 @pytest.fixture
 def mock_onnx_session():
     """
@@ -1239,34 +1255,65 @@ class TestVectorIndex:
     def test_aggregate_single_label(self, single_label_index):
         agg = single_label_index.aggregate()
         assert len(agg) == 2
-        assert agg.labels == [["A"], ["B"]]
+        _assert_labels_match(agg, [["A"], ["B"]])
         norms = np.linalg.norm(agg.vectors, axis=1)
         np.testing.assert_allclose(norms, 1.0, atol=1e-6)
 
-    def test_aggregate_multi_label(self, multi_label_index):
+    def test_aggregate_single_label_per_label(self, single_label_index):
+        """per_label=True on single-label groups is identical to default."""
+        agg = single_label_index.aggregate(per_label=True)
+        assert len(agg) == 2
+        _assert_labels_match(agg, [["A"], ["B"]])
+
+    def test_aggregate_multi_label_default(self, multi_label_index):
+        """Default: one centroid per unique label GROUP."""
         agg = multi_label_index.aggregate()
-        assert len(agg) == 3
-        assert agg.labels == [["A"], ["B"], ["C"]]
-        norms = np.linalg.norm(agg.vectors, axis=1)
-        np.testing.assert_allclose(norms, 1.0, atol=1e-6)
+        assert len(agg) == 4
+        _assert_labels_match(agg, [["A"], ["A", "C"], ["B"], ["B", "C"]])
 
-    def test_aggregate_multi_label_centroid_correctness(
+    def test_aggregate_multi_label_default_centroid_correctness(
         self, multi_label_index, normalized_vectors
     ):
-        """Label C appears on vectors 2 and 3. Its centroid should be the
-        normalized mean of those two vectors."""
+        """Label group ["A", "C"] appears only on vector 2.
+        Its centroid should equal that vector (already normalized)."""
         agg = multi_label_index.aggregate()
-        c_index = agg.labels.index(["C"])
+        centroid = _get_centroid_for(agg, ["A", "C"])
+        np.testing.assert_allclose(centroid, normalized_vectors[2], atol=1e-5)
+
+    def test_aggregate_multi_label_default_shared_group(
+        self, multi_label_index, normalized_vectors
+    ):
+        """Label group ["A"] appears on vectors 0 and 1.
+        Its centroid should be their normalized mean."""
+        agg = multi_label_index.aggregate()
+        centroid = _get_centroid_for(agg, ["A"])
+        expected = normalized_vectors[0] + normalized_vectors[1]
+        expected = expected / np.linalg.norm(expected)
+        np.testing.assert_allclose(centroid, expected, atol=1e-5)
+
+    def test_aggregate_multi_label_per_label(self, multi_label_index):
+        """per_label=True: one centroid per individual label, splitting groups."""
+        agg = multi_label_index.aggregate(per_label=True)
+        assert len(agg) == 3
+        _assert_labels_match(agg, [["A"], ["B"], ["C"]])
+
+    def test_aggregate_multi_label_per_label_centroid_correctness(
+        self, multi_label_index, normalized_vectors
+    ):
+        """per_label=True: label C appears on vectors 2 and 3.
+        Its centroid should be the normalized mean of those two vectors."""
+        agg = multi_label_index.aggregate(per_label=True)
+        centroid = _get_centroid_for(agg, ["C"])
         expected = normalized_vectors[2] + normalized_vectors[3]
         expected = expected / np.linalg.norm(expected)
-        np.testing.assert_allclose(agg.vectors[c_index], expected, atol=1e-5)
+        np.testing.assert_allclose(centroid, expected, atol=1e-5)
 
     def test_aggregate_already_unique(self, normalized_vectors):
         labels = [["a"], ["b"], ["c"], ["d"], ["e"], ["f"]]
         index = VectorIndex(vectors=normalized_vectors, labels=labels)
         agg = index.aggregate()
         assert len(agg) == 6
-        np.testing.assert_allclose(agg.vectors, normalized_vectors, atol=1e-6)
+        _assert_labels_match(agg, labels)
 
     # -- Dump / Load ----------------------------------------------------------
 

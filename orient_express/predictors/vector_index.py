@@ -86,38 +86,48 @@ class VectorIndex(Predictor):
             )
         return all_results
 
-    def aggregate(self) -> "VectorIndex":
+    def aggregate(self, per_label: bool = False) -> "VectorIndex":
         """
-        Aggregate the vectors into a single centroid per label.
-        """
-        label_to_indices: dict = {}
-        for i, label_group in enumerate(self.labels):
-            for label in label_group:
-                if label not in label_to_indices:
-                    label_to_indices[label] = []
-                label_to_indices[label].append(i)
+        Aggregate the vectors into a single centroid per unique label group.
 
-        unique_labels = sorted(label_to_indices.keys(), key=str)
+        Args:
+            per_label: if True, create one centroid per individual label
+                (splitting label groups apart). If False (default), create
+                one centroid per unique label group.
+        """
+        key_to_indices: dict = {}
+        for i, label_group in enumerate(self.labels):
+            if per_label:
+                keys = [label for label in label_group]
+            else:
+                keys = [tuple(sorted(label_group))]
+            for key in keys:
+                if key not in key_to_indices:
+                    key_to_indices[key] = []
+                key_to_indices[key].append(i)
+
+        sorted_keys = sorted(key_to_indices.keys(), key=str)
         centroids = np.empty(
-            (len(unique_labels), self.vectors.shape[1]), dtype=self.vectors.dtype
+            (len(sorted_keys), self.vectors.shape[1]), dtype=self.vectors.dtype
         )
 
-        for i, label in enumerate(unique_labels):
-            indices = label_to_indices[label]
+        new_labels = []
+        for i, key in enumerate(sorted_keys):
+            indices = key_to_indices[key]
             centroid = self.vectors[indices].mean(axis=0)
             norm = np.linalg.norm(centroid)
             if norm > 0:
                 centroid = centroid / norm
             centroids[i] = centroid
+            new_labels.append([key] if per_label else list(key))
 
-        new_labels = [[label] for label in unique_labels]
         return VectorIndex(vectors=centroids, labels=new_labels)
 
     def get_serving_container_image_uri(self) -> str:
         warnings.warn(
             "VectorIndex does not support serving via a container. Returning incompatible image URI."
         )
-        return "us-west1-docker.pkg.dev/shiftsmartinc/orient-express/image-onnx:v2.1.2"
+        return "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:v2.1.2"
 
     def get_serving_container_health_route(self, model_name) -> str:
         return f"/v1/models/{model_name}"
