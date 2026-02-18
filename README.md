@@ -19,11 +19,13 @@ pip install orient_express
 ```
 
 For local development:
+
 ```bash
 pip install -e .
 ```
 
 Or with Poetry:
+
 ```bash
 poetry install
 ```
@@ -75,7 +77,7 @@ vertex_model.deploy_to_endpoint(
 
 # remote prediction API depends on the endpoint container deployed with the model
 predictions = vertex_model.remote_predict(
-    [{"image": "https://storage.googleapis.com/ssm-media-uploads/example.jpg"}], 
+    [{"image": "https://storage.googleapis.com/ssm-media-uploads/example.jpg"}],
     endpoint_name="my-classifier-endpoint"
 )
 ```
@@ -152,19 +154,20 @@ predictions = local_predictor.predict(X_test)
 ### Platform Support Matrix
 
 | Platform | Architecture | ONNX Runtime Package | CUDA Available |
-|----------|--------------|---------------------|----------------|
-| Linux    | x86_64       | onnxruntime-gpu     | Yes            |
-| Linux    | aarch64      | onnxruntime         | No             |
-| Windows  | x64 (AMD64)  | onnxruntime-gpu     | Yes            |
-| Windows  | ARM64        | onnxruntime         | No             |
-| macOS    | x86_64       | onnxruntime         | No             |
-| macOS    | arm64        | onnxruntime         | No             |
+| -------- | ------------ | -------------------- | -------------- |
+| Linux    | x86_64       | onnxruntime-gpu      | Yes            |
+| Linux    | aarch64      | onnxruntime          | No             |
+| Windows  | x64 (AMD64)  | onnxruntime-gpu      | Yes            |
+| Windows  | ARM64        | onnxruntime          | No             |
+| macOS    | x86_64       | onnxruntime          | No             |
+| macOS    | arm64        | onnxruntime          | No             |
 
 The appropriate package is installed automatically based on your platform.
 
 ### Selecting CPU vs CUDA Execution
 
 When loading a predictor, use the `device` parameter to specify the execution provider:
+
 ```python
 from orient_express.predictors import ObjectDetectionPredictor
 
@@ -176,6 +179,7 @@ predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cuda")
 ```
 
 When using a Vertex AI model:
+
 ```python
 # CPU inference
 predictor = model.get_local_predictor(device="cpu")
@@ -513,11 +517,8 @@ index = build_vector_index(
     num_workers=8,               # parallel image loading
 )
 
-# Aggregate to one centroid per label
-centroid_index = index.aggregate()
-
 # Save and load
-centroid_index.dump("/path/to/artifact_dir")
+index.dump("/path/to/artifact_dir")
 
 from orient_express.predictors import get_predictor
 loaded_index = get_predictor("/path/to/artifact_dir")
@@ -533,16 +534,23 @@ batch_results = loaded_index.search_batch(query_matrix, k=5)
 
 #### Multi-label support
 
-Vectors can have multiple labels. This is useful when a single visual cluster maps to multiple SKUs:
+Vectors can have composite labels (use tuples). This is useful when a single visual cluster maps to multiple things:
 
 ```python
 index = VectorIndex(
     vectors=feature_matrix,
-    labels=[["sku_101", "sku_102"], ["sku_103"], ["sku_104", "sku_105"]],
+    labels=[("sku_101", "sku_102"), ("sku_103")],
 )
+```
 
-# aggregate() computes one centroid per unique label
-aggregated = index.aggregate()  # 5 vectors, one per SKU
+#### Per-label aggregation
+
+Vector indices in which labels are not unique can be aggregated so that each label has a single centroid.
+If `per_label=True` and the labels are composite (tuples), then the labels will be unpacked and aggregated separately.
+
+```python
+aggregated = index.aggregate(per_label=True)  # 3 vectors, one per label element ["sku_101", "sku_102", "sku_103"]
+aggregated = index.aggregate(per_label=False)  # 2 vectors, one per composite label  [("sku_101", "sku_102"), ("sku_103")]
 ```
 
 #### Output Structure

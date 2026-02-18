@@ -2,6 +2,7 @@ import os
 import json
 from dataclasses import dataclass
 import warnings
+from typing import Any
 
 import yaml
 import numpy as np
@@ -37,7 +38,7 @@ class VectorIndex(Predictor):
     def __init__(
         self,
         vectors: np.ndarray,
-        labels: list[list],
+        labels: list[int | str | tuple],
         normalize: bool = False,
     ):
         if vectors.ndim != 2:
@@ -53,8 +54,18 @@ class VectorIndex(Predictor):
             # Avoid division by zero for zero vectors
             norms = np.where(norms == 0, 1, norms)
             vectors = vectors / norms
+
         self.vectors = vectors
         self.labels = labels
+        self.label_to_idx = {}
+
+        self.multi_label = False
+
+        for i, label in enumerate(labels):
+            if label not in self.label_to_idx:
+                self.label_to_idx[label] = []
+            self.label_to_idx[label].append(i)
+
         self.model_path = None
 
     def search(self, query: np.ndarray, k: int = 1) -> list[SearchResult]:
@@ -86,21 +97,36 @@ class VectorIndex(Predictor):
             )
         return all_results
 
+    def get_by_idx(self, idx: int) -> np.ndarray:
+        return self.vectors[idx].ex
+
+    def get_by_idxs(self, idxs: list[int]) -> np.ndarray:
+        return np.expand_dims(self.vectors[idxs], axis=0)
+
+    def get_by_label(self, label: Any) -> np.ndarray:
+        return self.vectors[self.label_to_idx[label]]
+
+    def get_by_labels(self, labels: list[Any]) -> np.ndarray:
+        idxs = []
+        for label in labels:
+            idxs.extend(self.label_to_idx[label])
+        return self.vectors[idxs]
+
     def aggregate(self, per_label: bool = False) -> "VectorIndex":
         """
         Aggregate the vectors into a single centroid per unique label group.
 
         Args:
             per_label: if True, create one centroid per individual label
-                (splitting label groups apart). If False (default), create
-                one centroid per unique label group.
+                (splitting label groups (tuples) apart). If False (default),
+                create one centroid per unique label group.
         """
         key_to_indices: dict = {}
-        for i, label_group in enumerate(self.labels):
-            if per_label:
-                keys = [label for label in label_group]
+        for i, label in enumerate(self.labels):
+            if per_label and isinstance(label, tuple):
+                keys = label
             else:
-                keys = [tuple(sorted(label_group))]
+                keys = [label]
             for key in keys:
                 if key not in key_to_indices:
                     key_to_indices[key] = []
@@ -119,7 +145,7 @@ class VectorIndex(Predictor):
             if norm > 0:
                 centroid = centroid / norm
             centroids[i] = centroid
-            new_labels.append([key] if per_label else list(key))
+            new_labels.append(key)
 
         return VectorIndex(vectors=centroids, labels=new_labels)
 
@@ -161,12 +187,9 @@ class VectorIndex(Predictor):
         return self.vectors.shape[0]
 
     def __repr__(self) -> str:
-        unique_labels = set()
-        for group in self.labels:
-            unique_labels.update(group)
         return (
             f"VectorIndex({len(self)} vectors, dim={self.dim}, "
-            f"{len(unique_labels)} unique labels)"
+            f"{len(set(self.labels))} unique labels)"
         )
 
 
@@ -197,11 +220,10 @@ def _collate_pil(batch):
 
 def build_vector_index(
     crops: list[Image.Image | str | CropSpec],
-    labels: list,
+    labels: list[int | str | tuple],
     feature_extractor,
     batch_size: int = 128,
     normalize: bool = True,
-    multi_label: bool = False,
     num_workers: int = 0,
 ) -> VectorIndex:
     """Build a VectorIndex by extracting features from crops.
@@ -210,9 +232,8 @@ def build_vector_index(
         crops: images to extract features from. Each element can be a PIL
             Image (used directly), a file path string (loaded as a whole
             image), or a CropSpec (loaded and cropped to the specified bbox).
-        labels: one label per crop. If multi_label is False, each element is a
-            single label. If multi_label is True, each element should be a list
-            of labels.
+        labels: one label per crop. labels can be any hashable type, includeing
+            iterables like tuples.
         feature_extractor: anything with a .predict(list[Image]) method that
             returns objects with a .feature attribute (e.g. FeatureExtractionPredictor).
         batch_size: number of crops to process at once.
@@ -224,11 +245,6 @@ def build_vector_index(
         raise ValueError(
             f"crops length ({len(crops)}) must match labels length ({len(labels)})"
         )
-
-    if multi_label:
-        index_labels = [list(group) for group in labels]
-    else:
-        index_labels = [[label] for label in labels]
 
     loader = DataLoader(
         _CropDataset(crops),
@@ -243,4 +259,4 @@ def build_vector_index(
         all_features.extend([r.feature for r in results])
 
     vectors = np.vstack(all_features)
-    return VectorIndex(vectors=vectors, labels=index_labels, normalize=normalize)
+    return VectorIndex(vectors=vectors, labels=labels, normalize=normalize)
