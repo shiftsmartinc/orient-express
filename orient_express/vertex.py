@@ -297,14 +297,20 @@ def get_vertex_model(
             return None
     if len(models) > 1:
         warnings.warn(
-            f"Multiple models found with name '{model_name}'. Using the first one."
+            f"Multiple models found with name '{model_name}'. Using the latest one."
         )
 
-    resource_name = models[0].resource_name
+    latest_model = sorted(models, key=lambda x: x.update_time, reverse=True)[0]
+    resource_name = latest_model.resource_name
+
+    if version is None:
+        return VertexModel(
+            latest_model, model_name, project_name, region, int(latest_model.version_id)
+        )
 
     if version is not None:
         try:
-            model = aiplatform.Model(f"{resource_name}@{version}")
+            model = aiplatform.Model(model_name=resource_name, version=str(version))
         except Exception:
             if raise_exception:
                 raise Exception(
@@ -312,10 +318,3 @@ def get_vertex_model(
                 )
             return None
         return VertexModel(model, model_name, project_name, region, version)
-
-    # No version specified — find the latest
-    registry = aiplatform.models.ModelRegistry(model=resource_name)
-    versions = registry.list_versions()
-    latest = sorted(versions, key=lambda x: x.update_time, reverse=True)[0]
-    model = aiplatform.Model(f"{resource_name}@{latest.version_id}")
-    return VertexModel(model, model_name, project_name, region, int(latest.version_id))
