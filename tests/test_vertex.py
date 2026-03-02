@@ -144,18 +144,21 @@ class TestArtifactPathConstruction:
         mock_bucket.blob.return_value = mock_blob
 
         # Create existing model with version 3
-        existing_model = MagicMock()
-        existing_model.name = "existing-model-id"
-        existing_model.version_id = "3"
-        existing_model.update_time = datetime(2024, 1, 1)
-        existing_model.gca_resource.artifact_uri = "gs://bucket/models/my-detector/3/"
+        existing_version = MagicMock()
+        existing_version.name = "existing-model-id"
+        existing_version.version_id = "3"
+        existing_version.update_time = datetime(2024, 1, 1)
+        existing_version.gca_resource.artifact_uri = "gs://bucket/models/my-detector/3/"
+
+        parent_model = MagicMock()
+        parent_model.list_versions.return_value = [existing_version]
 
         with (
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
             patch("orient_express.vertex.aiplatform.init"),
         ):
-            mock_model_class.list.return_value = [existing_model]
+            mock_model_class.list.return_value = [parent_model]
             mock_model_class.upload.return_value = MagicMock(
                 name="new-model", version_id="4"
             )
@@ -267,12 +270,15 @@ class TestVersioningLogic:
 
         existing = mock_vertex_model_factory(name="existing-id", version_id="5")
 
+        parent_model = MagicMock()
+        parent_model.list_versions.return_value = [existing]
+
         with (
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
             patch("orient_express.vertex.aiplatform.init"),
         ):
-            mock_model_class.list.return_value = [existing]
+            mock_model_class.list.return_value = [parent_model]
             mock_uploaded = MagicMock(name="new-version", version_id="6")
             mock_model_class.upload.return_value = mock_uploaded
 
@@ -301,7 +307,6 @@ class TestVersioningLogic:
         mock_client, mock_bucket = mock_storage_client
         mock_bucket.blob.return_value = MagicMock()
 
-        # Multiple existing versions, not in order
         v1 = mock_vertex_model_factory(
             name="model-v1",
             version_id="1",
@@ -318,13 +323,15 @@ class TestVersioningLogic:
             update_time=datetime(2024, 2, 1),
         )
 
+        parent_model = MagicMock()
+        parent_model.list_versions.return_value = [v1, v3, v2]
+
         with (
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
             patch("orient_express.vertex.aiplatform.init"),
         ):
-            # get_vertex_model sorts by update_time to find latest
-            mock_model_class.list.return_value = [v1, v3, v2]
+            mock_model_class.list.return_value = [parent_model]
             mock_uploaded = MagicMock(name="new-version", version_id="4")
             mock_model_class.upload.return_value = mock_uploaded
 
@@ -369,11 +376,14 @@ class TestGetVertexModel:
             update_time=datetime(2024, 1, 10, 10, 0, 0),
         )
 
+        parent_model = MagicMock()
+        parent_model.list_versions.return_value = [v1, v2, v3]
+
         with (
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
             patch("orient_express.vertex.aiplatform.init"),
         ):
-            mock_model_class.list.return_value = [v1, v2, v3]
+            mock_model_class.list.return_value = [parent_model]
 
             result = get_vertex_model(
                 model_name="my-model",
@@ -382,7 +392,6 @@ class TestGetVertexModel:
                 version=None,
             )
 
-            # v2 has the latest update_time
             assert result.version == 2
             assert result.vertex_model.name == "model-v2"
 
@@ -392,11 +401,14 @@ class TestGetVertexModel:
         v2 = mock_vertex_model_factory(name="model-v2", version_id="2")
         v3 = mock_vertex_model_factory(name="model-v3", version_id="3")
 
+        parent_model = MagicMock()
+        parent_model.list_versions.return_value = [v1, v2, v3]
+
         with (
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
             patch("orient_express.vertex.aiplatform.init"),
         ):
-            mock_model_class.list.return_value = [v1, v2, v3]
+            mock_model_class.list.return_value = [parent_model]
 
             result = get_vertex_model(
                 model_name="my-model",
@@ -448,11 +460,14 @@ class TestGetVertexModel:
         v1 = mock_vertex_model_factory(name="model-v1", version_id="1")
         v2 = mock_vertex_model_factory(name="model-v2", version_id="2")
 
+        parent_model = MagicMock()
+        parent_model.list_versions.return_value = [v1, v2]
+
         with (
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
             patch("orient_express.vertex.aiplatform.init"),
         ):
-            mock_model_class.list.return_value = [v1, v2]
+            mock_model_class.list.return_value = [parent_model]
 
             with pytest.raises(Exception) as exc_info:
                 get_vertex_model(
@@ -471,11 +486,14 @@ class TestGetVertexModel:
         """Returns None when version not found and raise_exception=False."""
         v1 = mock_vertex_model_factory(name="model-v1", version_id="1")
 
+        parent_model = MagicMock()
+        parent_model.list_versions.return_value = [v1]
+
         with (
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
             patch("orient_express.vertex.aiplatform.init"),
         ):
-            mock_model_class.list.return_value = [v1]
+            mock_model_class.list.return_value = [parent_model]
 
             result = get_vertex_model(
                 model_name="my-model",
@@ -505,6 +523,77 @@ class TestGetVertexModel:
             mock_model_class.list.assert_called_once_with(
                 filter="display_name=specific-model-name"
             )
+
+    def test_warns_when_multiple_models_share_display_name(
+        self, mock_vertex_model_factory
+    ):
+        """Warns user when Model.list returns more than one model resource."""
+        v1 = mock_vertex_model_factory(name="model-v1", version_id="1")
+
+        parent_model_a = MagicMock()
+        parent_model_a.list_versions.return_value = [v1]
+        parent_model_b = MagicMock()
+        parent_model_b.list_versions.return_value = [v1]
+
+        with (
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+        ):
+            mock_model_class.list.return_value = [parent_model_a, parent_model_b]
+
+            import warnings
+
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                get_vertex_model(
+                    model_name="my-model",
+                    project_name="test-project",
+                    region="us-central1",
+                )
+                assert len(w) == 1
+                assert (
+                    "my-model" in str(w[0].message).lower()
+                    or "multiple" in str(w[0].message).lower()
+                )
+
+    def test_uses_first_model_when_multiple_share_display_name(
+        self, mock_vertex_model_factory
+    ):
+        """When multiple model resources exist, uses the first one's versions."""
+        v1 = mock_vertex_model_factory(
+            name="model-a-v1", version_id="1", update_time=datetime(2024, 1, 1)
+        )
+        v2 = mock_vertex_model_factory(
+            name="model-a-v2", version_id="2", update_time=datetime(2024, 2, 1)
+        )
+        v3_other = mock_vertex_model_factory(
+            name="model-b-v3", version_id="3", update_time=datetime(2024, 3, 1)
+        )
+
+        parent_model_a = MagicMock()
+        parent_model_a.list_versions.return_value = [v1, v2]
+        parent_model_b = MagicMock()
+        parent_model_b.list_versions.return_value = [v3_other]
+
+        with (
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+        ):
+            mock_model_class.list.return_value = [parent_model_a, parent_model_b]
+
+            import warnings
+
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always")
+                result = get_vertex_model(
+                    model_name="my-model",
+                    project_name="test-project",
+                    region="us-central1",
+                )
+
+            # Should pick v2 (latest from first model), not v3_other
+            assert result.version == 2
+            assert result.vertex_model.name == "model-a-v2"
 
 
 # -----------------------------------------------------------------------------

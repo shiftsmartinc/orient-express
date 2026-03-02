@@ -1,5 +1,6 @@
 import os
 import tempfile
+import warnings
 
 import yaml
 import joblib
@@ -296,18 +297,23 @@ def get_vertex_model(
         else:
             return None
 
+    if len(models) > 1:
+        warnings.warn(
+            f"Multiple models found with name '{model_name}'. Returning the latest version."
+        )
+    versions = models[0].list_versions()
+
     if version is None:
-        latest_model = sorted(models, key=lambda x: x.update_time, reverse=True)[0]
+        latest_model = sorted(versions, key=lambda x: x.update_time, reverse=True)[0]
         return VertexModel(
             latest_model, model_name, project_name, region, int(latest_model.version_id)
         )
 
-    for model in models:
-        if int(model.version_id) == version:
-            return VertexModel(model, model_name, project_name, region, version)
+    for v in versions:
+        if int(v.version_id) == version:
+            return VertexModel(v, model_name, project_name, region, version)
 
     if raise_exception:
         raise Exception(
             f"Model '{model_name}' with version '{version}' not found in registry for project '{project_name}' region '{region}'"
         )
-    return None
