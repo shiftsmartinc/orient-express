@@ -288,7 +288,6 @@ def get_vertex_model(
 ):
     vertex_init(project_name, region)
     models = aiplatform.Model.list(filter=f"display_name={model_name}")
-
     if not models:
         if raise_exception:
             raise Exception(
@@ -296,24 +295,27 @@ def get_vertex_model(
             )
         else:
             return None
-
     if len(models) > 1:
         warnings.warn(
-            f"Multiple models found with name '{model_name}'. Returning the latest version."
-        )
-    versions = models[0].list_versions()
-
-    if version is None:
-        latest_model = sorted(versions, key=lambda x: x.update_time, reverse=True)[0]
-        return VertexModel(
-            latest_model, model_name, project_name, region, int(latest_model.version_id)
+            f"Multiple models found with name '{model_name}'. Using the first one."
         )
 
-    for v in versions:
-        if int(v.version_id) == version:
-            return VertexModel(v, model_name, project_name, region, version)
+    resource_name = models[0].resource_name
 
-    if raise_exception:
-        raise Exception(
-            f"Model '{model_name}' with version '{version}' not found in registry for project '{project_name}' region '{region}'"
-        )
+    if version is not None:
+        try:
+            model = aiplatform.Model(f"{resource_name}@{version}")
+        except Exception:
+            if raise_exception:
+                raise Exception(
+                    f"Model '{model_name}' with version '{version}' not found in registry for project '{project_name}' region '{region}'"
+                )
+            return None
+        return VertexModel(model, model_name, project_name, region, version)
+
+    # No version specified — find the latest
+    registry = aiplatform.models.ModelRegistry(model=resource_name)
+    versions = registry.list_versions()
+    latest = sorted(versions, key=lambda x: x.update_time, reverse=True)[0]
+    model = aiplatform.Model(f"{resource_name}@{latest.version_id}")
+    return VertexModel(model, model_name, project_name, region, int(latest.version_id))
