@@ -10,6 +10,7 @@ These tests verify that:
 """
 
 import os
+from collections import Counter
 
 import pytest
 import numpy as np
@@ -51,15 +52,15 @@ from orient_express.predictors.vector_index import (
 
 def _assert_labels_match(agg, expected_labels):
     """Assert aggregated labels match expected, ignoring order."""
-    assert sorted(agg.labels, key=str) == sorted(expected_labels, key=str)
+    assert Counter(agg.labels) == Counter(expected_labels)
 
 
-def _get_centroid_for(agg, label):
+def _get_centroid_for(agg, target_label):
     """Look up the centroid vector for a given label."""
-    for i, l in enumerate(agg.labels):
-        if l == label:
+    for i, label in enumerate(agg.labels):
+        if label == target_label:
             return agg.vectors[i]
-    raise ValueError(f"Label {label} not found in {agg.labels}")
+    raise ValueError(f"Label {target_label} not found in {agg.labels}")
 
 
 @pytest.fixture
@@ -1443,8 +1444,8 @@ class TestVectorIndex:
         index.dump(str(tmp_path))
         loaded = load_vector_index(str(tmp_path))
         assert loaded.labels == labels
-        for orig, roundtripped in zip(labels, loaded.labels):
-            assert type(orig) == type(roundtripped)
+        for orig, roundtripped in zip(labels, loaded.labels, strict=True):
+            assert type(orig) is type(roundtripped)
 
     def test_dump_creates_expected_files(self, single_label_index, tmp_path):
         files = single_label_index.dump(str(tmp_path))
