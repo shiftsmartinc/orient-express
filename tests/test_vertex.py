@@ -71,7 +71,6 @@ def mock_vertex_model_factory():
     return _create
 
 
-
 @pytest.fixture
 def mock_predictor():
     """Creates a mock Predictor that can be uploaded."""
@@ -146,7 +145,9 @@ class TestArtifactPathConstruction:
 
         # Create existing model returned by Model.list
         parent_model = MagicMock()
-        parent_model.resource_name = "projects/test-project/locations/us-central1/models/existing-model-id"
+        parent_model.resource_name = (
+            "projects/test-project/locations/us-central1/models/existing-model-id"
+        )
         parent_model.name = "existing-model-id"
         parent_model.version_id = "3"
         parent_model.update_time = datetime(2024, 1, 1)
@@ -162,7 +163,10 @@ class TestArtifactPathConstruction:
         with (
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
-            patch("orient_express.vertex.aiplatform.models.ModelRegistry", return_value=mock_registry),
+            patch(
+                "orient_express.vertex.aiplatform.models.ModelRegistry",
+                return_value=mock_registry,
+            ),
             patch("orient_express.vertex.aiplatform.init"),
         ):
             mock_model_class.list.return_value = [parent_model]
@@ -276,7 +280,9 @@ class TestVersioningLogic:
         mock_bucket.blob.return_value = MagicMock()
 
         parent_model = MagicMock()
-        parent_model.resource_name = "projects/test-project/locations/us-central1/models/existing-id"
+        parent_model.resource_name = (
+            "projects/test-project/locations/us-central1/models/existing-id"
+        )
         parent_model.name = "existing-id"
         parent_model.version_id = "5"
         parent_model.update_time = datetime(2024, 1, 1)
@@ -290,7 +296,10 @@ class TestVersioningLogic:
         with (
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
-            patch("orient_express.vertex.aiplatform.models.ModelRegistry", return_value=mock_registry),
+            patch(
+                "orient_express.vertex.aiplatform.models.ModelRegistry",
+                return_value=mock_registry,
+            ),
             patch("orient_express.vertex.aiplatform.init"),
         ):
             mock_model_class.list.return_value = [parent_model]
@@ -323,7 +332,9 @@ class TestVersioningLogic:
         mock_bucket.blob.return_value = MagicMock()
 
         parent_model = MagicMock()
-        parent_model.resource_name = "projects/test-project/locations/us-central1/models/model-id"
+        parent_model.resource_name = (
+            "projects/test-project/locations/us-central1/models/model-id"
+        )
         parent_model.name = "model-id"
         parent_model.version_id = "3"
         parent_model.update_time = datetime(2024, 3, 1)
@@ -337,7 +348,10 @@ class TestVersioningLogic:
         with (
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
-            patch("orient_express.vertex.aiplatform.models.ModelRegistry", return_value=mock_registry),
+            patch(
+                "orient_express.vertex.aiplatform.models.ModelRegistry",
+                return_value=mock_registry,
+            ),
             patch("orient_express.vertex.aiplatform.init"),
         ):
             mock_model_class.list.return_value = [parent_model]
@@ -452,9 +466,7 @@ class TestGetVertexModel:
 
             assert result.version == 2
             assert result.vertex_model == mock_constructed_model
-            mock_model_class.assert_called_with(
-                model_name=m.resource_name, version="2"
-            )
+            mock_model_class.assert_called_with(model_name=m.resource_name, version="2")
 
     def test_raises_when_model_not_found_and_raise_exception_true(self):
         """Raises exception when no models found and raise_exception=True."""

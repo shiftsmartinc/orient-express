@@ -59,8 +59,6 @@ class VectorIndex(Predictor):
         self.labels = labels
         self.label_to_idx = {}
 
-        self.multi_label = False
-
         for i, label in enumerate(labels):
             if label not in self.label_to_idx:
                 self.label_to_idx[label] = []
@@ -238,7 +236,6 @@ def build_vector_index(
             returns objects with a .feature attribute (e.g. FeatureExtractionPredictor).
         batch_size: number of crops to process at once.
         normalize: whether to L2-normalize the resulting feature vectors.
-        multi_label: if True, labels are already lists of labels per crop.
         num_workers: number of DataLoader workers for parallel image loading.
     """
     if len(crops) != len(labels):
