@@ -99,6 +99,7 @@ def load_vector_index(dir: str, metadata: dict | None = None):
     data = np.load(artifact_path, allow_pickle=False)
     vectors = data["vectors"]
     labels = json.loads(str(data["labels_json"]))
+    labels = [tuple(label) if isinstance(label, list) else label for label in labels]
     index = VectorIndex(vectors=vectors, labels=labels)
     index.model_path = artifact_path
     return index

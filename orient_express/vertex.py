@@ -1,5 +1,6 @@
 import os
 import tempfile
+import warnings
 
 import yaml
 import joblib
@@ -287,7 +288,6 @@ def get_vertex_model(
 ):
     vertex_init(project_name, region)
     models = aiplatform.Model.list(filter=f"display_name={model_name}")
-
     if not models:
         if raise_exception:
             raise Exception(
@@ -295,19 +295,26 @@ def get_vertex_model(
             )
         else:
             return None
+    if len(models) > 1:
+        warnings.warn(
+            f"Multiple models found with name '{model_name}'. Using the latest one."
+        )
+
+    latest_model = sorted(models, key=lambda x: x.update_time, reverse=True)[0]
+    resource_name = latest_model.resource_name
 
     if version is None:
-        latest_model = sorted(models, key=lambda x: x.update_time, reverse=True)[0]
         return VertexModel(
             latest_model, model_name, project_name, region, int(latest_model.version_id)
         )
 
-    for model in models:
-        if int(model.version_id) == version:
-            return VertexModel(model, model_name, project_name, region, version)
-
-    if raise_exception:
-        raise Exception(
-            f"Model '{model_name}' with version '{version}' not found in registry for project '{project_name}' region '{region}'"
-        )
-    return None
+    if version is not None:
+        try:
+            model = aiplatform.Model(model_name=resource_name, version=str(version))
+        except Exception:
+            if raise_exception:
+                raise Exception(
+                    f"Failed to fetch model '{model_name}' with version '{version}' in registry for project '{project_name}' region '{region}'"
+                )
+            return None
+        return VertexModel(model, model_name, project_name, region, version)
