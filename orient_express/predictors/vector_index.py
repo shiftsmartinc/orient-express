@@ -98,10 +98,10 @@ class VectorIndex(Predictor):
         return all_results
 
     def get_by_idx(self, idx: int) -> np.ndarray:
-        return self.vectors[idx].ex
+        return self.vectors[idx]
 
     def get_by_idxs(self, idxs: list[int]) -> np.ndarray:
-        return np.expand_dims(self.vectors[idxs], axis=0)
+        return self.vectors[idxs]
 
     def get_by_label(self, label: Any) -> np.ndarray:
         return self.vectors[self.label_to_idx[label]]

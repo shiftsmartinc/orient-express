@@ -77,8 +77,8 @@ vertex_model.deploy_to_endpoint(
 
 # remote prediction API depends on the endpoint container deployed with the model
 predictions = vertex_model.remote_predict(
+    "my-classifier-endpoint",
     [{"image": "https://storage.googleapis.com/ssm-media-uploads/example.jpg"}],
-    endpoint_name="my-classifier-endpoint"
 )
 ```
 
@@ -539,7 +539,7 @@ Vectors can have composite labels (use tuples). This is useful when a single vis
 ```python
 index = VectorIndex(
     vectors=feature_matrix,
-    labels=[("sku_101", "sku_102"), ("sku_103")],
+    labels=[("sku_101", "sku_102"), ("sku_103",)],
 )
 ```
 

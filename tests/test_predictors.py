@@ -1270,6 +1270,16 @@ class TestVectorIndex:
         with pytest.raises(KeyError):
             single_label_index.get_by_label("NONEXISTENT")
 
+    def test_get_by_idx(self, single_label_index, normalized_vectors):
+        vec = single_label_index.get_by_idx(0)
+        assert vec.shape == (64,)
+        np.testing.assert_allclose(vec, normalized_vectors[0])
+
+        vecs = single_label_index.get_by_idxs([0, 1])
+        assert vecs.shape == (2, 64)
+        np.testing.assert_allclose(vecs[0], normalized_vectors[0])
+        np.testing.assert_allclose(vecs[1], normalized_vectors[1])
+
     # -- Search ---------------------------------------------------------------
 
     def test_search_self_is_top_match(self, single_label_index, normalized_vectors):

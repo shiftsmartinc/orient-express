@@ -314,7 +314,7 @@ def get_vertex_model(
         except Exception:
             if raise_exception:
                 raise Exception(
-                    f"Model '{model_name}' with version '{version}' not found in registry for project '{project_name}' region '{region}'"
+                    f"Failed to fetch model '{model_name}' with version '{version}' in registry for project '{project_name}' region '{region}'"
                 )
             return None
         return VertexModel(model, model_name, project_name, region, version)
