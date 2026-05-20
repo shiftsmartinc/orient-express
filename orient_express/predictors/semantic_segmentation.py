@@ -17,7 +17,7 @@ class SemanticSegmentationPrediction:
 
     def to_dict(self, include_conf_masks: bool = False):
         dict_repr = {
-            "class_mask": self.class_mask,
+            "class_mask": self.class_mask.tolist(),
         }
         if include_conf_masks:
             dict_repr["conf_masks"] = self.conf_masks.tolist()
@@ -60,7 +60,7 @@ class SemanticSegmentationPredictor(ImagePredictor):
     backend_model = OnnxSemanticSegmentation
 
     def predict(
-        self, images: list[Image.Image]
+        self, images: list[Image.Image], confidence: float = 0.5
     ) -> list[SemanticSegmentationPrediction]:
         if not images:
             return []
@@ -68,6 +68,8 @@ class SemanticSegmentationPredictor(ImagePredictor):
         outputs = []
         for masks in raw_outputs:
             class_mask = np.argmax(masks, axis=0)
+            max_probs = np.max(masks, axis=0)
+            class_mask = np.where(max_probs >= confidence, class_mask, -1)
             outputs.append(
                 SemanticSegmentationPrediction(
                     class_mask=class_mask,
@@ -77,14 +79,17 @@ class SemanticSegmentationPredictor(ImagePredictor):
         return outputs
 
     def get_annotated_image(
-        self, image: Image.Image, mask: np.array, mask_opacity: float = 0.3
+        self,
+        image: Image.Image,
+        prediction: SemanticSegmentationPrediction,
+        mask_opacity: float = 0.3,
     ) -> Image.Image:
         opencv_image = pil_to_opencv(image)
         mask_overlay = opencv_image.copy()
 
         for class_id, class_name in self.classes.items():
             fill_color = self.color_scheme.get(class_name, (120, 120, 120))
-            mask_overlay[mask == class_id] = fill_color[:3]
+            mask_overlay[prediction.class_mask == class_id] = fill_color[:3]
 
         annotated_image = cv2.addWeighted(
             mask_overlay, mask_opacity, opencv_image, 1 - mask_opacity, 0

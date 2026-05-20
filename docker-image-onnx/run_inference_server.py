@@ -81,11 +81,8 @@ class OnnxImageModel(Model):
                 predictions[img_idx]["status"] = "success"
 
         else:
-            if isinstance(self.model, SemanticSegmentationPredictor):
-                model_predictions = self.model.predict(images)
-            else:
-                confidence = parameters.get("confidence", 0.5)
-                model_predictions = self.model.predict(images, confidence)
+            confidence = parameters.get("confidence", 0.5)
+            model_predictions = self.model.predict(images, confidence)
 
             with ThreadPoolExecutor() as executor:
                 futures = [
