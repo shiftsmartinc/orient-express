@@ -1138,8 +1138,12 @@ class TestSemanticSegmentationPredictor:
             assert "valid_mask" in result_dict
             assert "conf_masks" not in result_dict
 
-            class_png = Image.open(io.BytesIO(base64.b64decode(result_dict["class_mask"])))
-            valid_png = Image.open(io.BytesIO(base64.b64decode(result_dict["valid_mask"])))
+            class_png = Image.open(
+                io.BytesIO(base64.b64decode(result_dict["class_mask"]))
+            )
+            valid_png = Image.open(
+                io.BytesIO(base64.b64decode(result_dict["valid_mask"]))
+            )
             assert class_png.size == (100, 100)
             assert valid_png.size == (100, 100)
 

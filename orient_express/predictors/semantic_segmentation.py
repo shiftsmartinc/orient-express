@@ -91,7 +91,9 @@ class SemanticSegmentationPredictor(ImagePredictor):
 
         for class_id, class_name in self.classes.items():
             fill_color = self.color_scheme.get(class_name, (120, 120, 120))
-            mask_overlay[(prediction.class_mask == class_id) & prediction.valid_mask] = fill_color[:3]
+            mask_overlay[
+                (prediction.class_mask == class_id) & prediction.valid_mask
+            ] = fill_color[:3]
 
         annotated_image = cv2.addWeighted(
             mask_overlay, mask_opacity, opencv_image, 1 - mask_opacity, 0
