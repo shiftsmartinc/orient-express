@@ -25,6 +25,9 @@ onnxruntime = {version = "^1.20", markers = "sys_platform == 'darwin' or platfor
 [tool.poetry.group.dev.dependencies]
 black = "24.10.0"
 pytest = "8.3.3"
+ipykernel = "^7.2.0"
+
+[tool.poetry.group.server.dependencies]
 kserve = "^0.16.0"
 python-json-logger = "^4.0.0"
 

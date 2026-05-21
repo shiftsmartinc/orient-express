@@ -9,6 +9,8 @@ These tests verify that:
 5. Annotation methods modify images correctly in expected regions
 """
 
+import base64
+import io
 import os
 from collections import Counter
 
@@ -1089,11 +1091,37 @@ class TestSemanticSegmentationPredictor:
             results = predictor.predict([img])
 
             class_mask = results[0].class_mask
+            valid_mask = results[0].valid_mask
+            assert class_mask.dtype == np.uint8
+            assert valid_mask.dtype == bool
             assert class_mask[10, 10] == 0  # Top-left should be class 0
             assert class_mask[90, 90] == 2  # Bottom-right should be class 2
+            assert valid_mask[10, 10]  # max prob 0.9 >= 0.5
+            assert valid_mask[90, 90]  # max prob 0.8 >= 0.5
+            assert not valid_mask[50, 50]  # zeros region, below threshold
+
+    def test_confidence_threshold(self, mock_semantic_session, class_mapping):
+        """valid_mask reflects the confidence threshold."""
+        img = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8), mode="RGB")
+        masks = np.full((1, 3, 50, 50), 0.1)  # all classes below 0.5
+
+        mock_semantic_session.run_outputs = [masks]
+
+        with patch(
+            "orient_express.predictors.predictor.ort.InferenceSession",
+            return_value=mock_semantic_session,
+        ):
+            predictor = SemanticSegmentationPredictor("fake.onnx", class_mapping)
+            results = predictor.predict([img], confidence=0.5)
+
+            assert not results[0].valid_mask.any()
+
+            # Lower threshold makes every pixel valid.
+            results = predictor.predict([img], confidence=0.05)
+            assert results[0].valid_mask.all()
 
     def test_prediction_to_dict(self, mock_semantic_session, class_mapping):
-        """SemanticSegmentationPrediction.to_dict() works with and without conf_masks."""
+        """SemanticSegmentationPrediction.to_dict() emits base64 PNGs for masks."""
         img = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8), mode="RGB")
 
         mock_semantic_session.run_outputs = [np.zeros((1, 3, 50, 50))]
@@ -1107,7 +1135,17 @@ class TestSemanticSegmentationPredictor:
 
             result_dict = results[0].to_dict(include_conf_masks=False)
             assert "class_mask" in result_dict
+            assert "valid_mask" in result_dict
             assert "conf_masks" not in result_dict
+
+            class_png = Image.open(
+                io.BytesIO(base64.b64decode(result_dict["class_mask"]))
+            )
+            valid_png = Image.open(
+                io.BytesIO(base64.b64decode(result_dict["valid_mask"]))
+            )
+            assert class_png.size == (100, 100)
+            assert valid_png.size == (100, 100)
 
             result_dict_with_conf = results[0].to_dict(include_conf_masks=True)
             assert "conf_masks" in result_dict_with_conf
@@ -1130,8 +1168,7 @@ class TestSemanticSegmentationPredictor:
             predictor.color_scheme = color_scheme
 
             results = predictor.predict([checkerboard_image])
-            class_mask = results[0].class_mask
-            annotated = predictor.get_annotated_image(checkerboard_image, class_mask)
+            annotated = predictor.get_annotated_image(checkerboard_image, results[0])
 
             annotated_arr = np.array(annotated)
 

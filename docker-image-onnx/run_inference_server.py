@@ -1,4 +1,5 @@
 import logging
+import logging.config
 import os
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +18,6 @@ from orient_express.vertex import download_artifacts, ARTIFACT_DIR
 from orient_express.predictors import (
     get_predictor,
     ClassificationPredictor,
-    SemanticSegmentationPredictor,
 )
 
 
@@ -81,11 +81,8 @@ class OnnxImageModel(Model):
                 predictions[img_idx]["status"] = "success"
 
         else:
-            if isinstance(self.model, SemanticSegmentationPredictor):
-                model_predictions = self.model.predict(images)
-            else:
-                confidence = parameters.get("confidence", 0.5)
-                model_predictions = self.model.predict(images, confidence)
+            confidence = parameters.get("confidence", 0.5)
+            model_predictions = self.model.predict(images, confidence)
 
             with ThreadPoolExecutor() as executor:
                 futures = [

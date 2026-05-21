@@ -74,6 +74,12 @@ def image_to_base64(image):
     return base64.b64encode(bytes_content).decode("utf-8")
 
 
+def mask_to_base64(mask: np.ndarray) -> str:
+    buffered = BytesIO()
+    Image.fromarray(mask).save(buffered, format="PNG")
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+
 def image_to_bytes(image):
     buffered = BytesIO()
     if image.mode == "RGBA":

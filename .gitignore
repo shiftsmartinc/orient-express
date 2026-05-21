@@ -169,3 +169,6 @@ orient_express/artifacts/
 *.onnx
 *.pt
 *.pth
+
+# Local docker test outputs
+test-output/
