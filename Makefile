@@ -79,13 +79,13 @@ run_local_image_onnx:
 
 test_image_onnx:
 	mkdir -p test-output
-	$(eval RESP := $(shell mktemp))
+	@RESP=$$(mktemp); \
+	trap "rm -f $$RESP" EXIT; \
 	curl -s -X POST http://localhost:8080/v1/models/$(MODEL_NAME):predict \
 		-H "Content-Type: application/json" \
 		-d '{"instances": [{"image": "$(IMAGE_URL)"}], "parameters": {"confidence": $(CONFIDENCE)}}' \
-		-o $(RESP)
-	jq -r '.predictions[0].debug_image // empty' $(RESP) | base64 -d > test-output/debug_image.jpg
-	jq -r '.predictions[0].predictions.class_mask // empty' $(RESP) | base64 -d > test-output/class_mask.png
-	jq -r '.predictions[0].predictions.valid_mask // empty' $(RESP) | base64 -d > test-output/valid_mask.png
-	jq 'del(.predictions[].debug_image?, .predictions[].predictions.class_mask?, .predictions[].predictions.valid_mask?)' $(RESP) > test-output/response.json
-	rm $(RESP)
+		-o $$RESP && \
+	jq -r '.predictions[0].debug_image // empty' $$RESP | base64 -d > test-output/debug_image.jpg && \
+	jq -r '.predictions[0].predictions.class_mask // empty' $$RESP | base64 -d > test-output/class_mask.png && \
+	jq -r '.predictions[0].predictions.valid_mask // empty' $$RESP | base64 -d > test-output/valid_mask.png && \
+	jq 'del(.predictions[].debug_image?, .predictions[].predictions.class_mask?, .predictions[].predictions.valid_mask?)' $$RESP > test-output/response.json
