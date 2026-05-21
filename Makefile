@@ -57,6 +57,7 @@ run_local_xgboost_scikit_learn:
 		-e GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json \
 		-e GOOGLE_CLOUD_PROJECT=$(GOOGLE_CLOUD_PROJECT) \
 		-e AIP_STORAGE_URI=$(AIP_STORAGE_URI) \
+		-e MODEL_NAME=$(MODEL_NAME) \
 		-p 8080:8080 $(XGBOOST_SCIKIT_LEARN):$(XGBOOST_TAG)_local
 
 build_local_image_onnx:

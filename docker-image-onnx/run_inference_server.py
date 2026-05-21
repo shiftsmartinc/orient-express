@@ -1,4 +1,5 @@
 import logging
+import logging.config
 import os
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -17,7 +18,6 @@ from orient_express.vertex import download_artifacts, ARTIFACT_DIR
 from orient_express.predictors import (
     get_predictor,
     ClassificationPredictor,
-    SemanticSegmentationPredictor,
 )
 
 

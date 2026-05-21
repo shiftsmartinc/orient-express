@@ -1,36 +1,33 @@
 import json
 import logging
+import logging.config
 import os
 
-import gcsfs
-import joblib
 import pandas as pd
 from kserve import Model, ModelServer
+
+from orient_express.vertex import download_artifacts, ARTIFACT_DIR
+from orient_express.predictors import get_predictor
 
 
 class ScikitLearnPipelineModel(Model):
     def __init__(self, name: str, artifacts_path: str):
         super().__init__(name)
+        self.name = name
         self.artifacts_path = artifacts_path
         self.model = None
 
     def load(self):
-        model_path = f"{self.artifacts_path}/model.joblib"
-        logging.info(f"Loading model from {model_path}")
-
-        # Create a GCSFileSystem object
-        fs = gcsfs.GCSFileSystem()
-
-        # Open the file from GCS and load the model
-        with fs.open(model_path, "rb") as f:
-            self.model = joblib.load(f)
-
+        logging.info(f"[{self.name}] loading model from GCS")
+        download_dir = os.path.join(ARTIFACT_DIR, self.name)
+        download_artifacts(download_dir, self.artifacts_path)
+        self.model = get_predictor(download_dir)
         self.ready = True
-        logging.info("Model loaded successfully")
+        logging.info(f"{self.name} loaded successfully")
         return self
 
     def predict(self, inputs, *args, **kwargs):
-        logging.info("Executing prediction")
+        logging.info(f"[{self.name}] executing prediction")
         decoded_input = self.decode_input(inputs)
 
         input_df = pd.DataFrame(decoded_input["instances"])
@@ -40,7 +37,7 @@ class ScikitLearnPipelineModel(Model):
         return response
 
     def decode_input(self, input_data):
-        logging.info(f"ShiftAssignmentFFRModelPayloadType: {type(input_data)}")
+        logging.info(f"PayloadType: {type(input_data)}")
         if isinstance(input_data, (bytes, str)):
             return json.loads(input_data)
         elif isinstance(input_data, dict):
@@ -54,11 +51,11 @@ if __name__ == "__main__":
 
     try:
         storage_uri = os.environ["AIP_STORAGE_URI"]
+        model_name = os.environ["MODEL_NAME"]
 
-        model = ScikitLearnPipelineModel("orient-express-model", storage_uri)
+        model = ScikitLearnPipelineModel(model_name, storage_uri)
         model.load()
 
-        # Start the model server with the loaded model
         model_server = ModelServer(http_port=8080, workers=1)
         model_server.start([model])
     except Exception as e:
