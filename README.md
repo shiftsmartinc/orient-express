@@ -566,6 +566,191 @@ class SearchResult:
 
 ---
 
+## Deployed Endpoint APIs
+
+When you upload a model with orient-express and deploy it to a Vertex AI endpoint, the actual HTTP API exposed by the endpoint is determined by the serving container image — not by your Python predictor code. Orient-express ships two such images:
+
+- `image-onnx` — serves the built-in ONNX predictor types (classification, detection, segmentation).
+- `xgboost-scikit-learn` — serves any joblib-loadable model (sklearn pipelines, xgboost, etc.).
+
+This section documents the request/response shape each image's endpoint exposes once deployed.
+
+### How the docker images connect to GCP endpoints
+
+The deployment flow is:
+
+1. **Train + export.** You build a predictor locally (e.g. `ClassificationPredictor("model.onnx", classes)`) or train a sklearn/xgboost model.
+2. **Upload.** `upload_model` / `upload_model_joblib` pushes the artifacts to GCS under `gs://<bucket>/models/<model_name>/<version>/` and registers a Vertex AI Model with `serving_container_image_uri` pointing at one of orient-express's images.
+3. **Deploy.** `vertex_model.deploy_to_endpoint(...)` (or the Vertex console) attaches the registered model to a Vertex AI Endpoint. Vertex starts the container with `AIP_STORAGE_URI` set to the GCS path from step 2, plus `MODEL_NAME` set to the model's display name.
+4. **Serve.** The container downloads the artifacts on startup, instantiates the right predictor via metadata, and listens on `/v1/models/<MODEL_NAME>:predict`.
+5. **Call.** Clients POST to `https://<region>-aiplatform.googleapis.com/v1/projects/<project>/locations/<region>/endpoints/<endpoint_id>:predict` with a Bearer token. Vertex routes the request into the container and returns the JSON response.
+
+Every endpoint accepts the same envelope:
+
+```json
+{
+  "instances": [...],
+  "parameters": {...}
+}
+```
+
+What goes in `instances` / `parameters`, and what comes back in `predictions`, is per-image and per-predictor — covered below.
+
+### ONNX Image Endpoint
+
+Image: `us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:<tag>`
+
+Common request shape across all ONNX predictor types:
+
+```json
+{
+  "instances": [
+    {"image": "<http(s) URL | gs:// URI | base64 | data URI>"}
+  ],
+  "parameters": {
+    "confidence": 0.5
+  }
+}
+```
+
+Common response envelope:
+
+```json
+{
+  "predictions": [
+    {"status": "success", ...predictor-specific fields...}
+  ]
+}
+```
+
+`status` values: `"success"`, `"failed to download image"`, or `"failed to get debug image"`. Malformed payloads return top-level `{"error": "Failed to decode input"}` instead of `predictions`.
+
+The predictor-specific fields differ by model type — covered in the subsections below.
+
+#### Classification
+
+For models uploaded as `ClassificationPredictor`. `parameters.confidence` is **not** honored (the predictor always returns the top class).
+
+Per-image response:
+
+```json
+{
+  "status": "success",
+  "class": "cat",
+  "score": 0.95,
+  "class_scores": {"cat": 0.95, "dog": 0.03, "bird": 0.02}
+}
+```
+
+No `debug_image` for classification (nothing meaningful to draw).
+
+#### Multi-label classification
+
+For models uploaded as `MultiLabelClassificationPredictor`. `parameters.confidence` is the per-class threshold for inclusion in `classes` (default `0.5`).
+
+Per-image response:
+
+```json
+{
+  "status": "success",
+  "predictions": {
+    "classes": ["contains_cat", "contains_bird"],
+    "class_scores": {"contains_cat": 0.95, "contains_dog": 0.03, "contains_bird": 0.82}
+  },
+  "debug_image": null
+}
+```
+
+`debug_image` is always `null` for multi-label.
+
+#### Object detection
+
+For models uploaded as `BoundingBoxPredictor`. `parameters.confidence` filters detections below the threshold (default `0.5`).
+
+Per-image response:
+
+```json
+{
+  "status": "success",
+  "predictions": [
+    {"class": "person", "score": 0.92, "bbox": {"x1": 100.5, "y1": 50.2, "x2": 300.8, "y2": 400.1}}
+  ],
+  "debug_image": "<base64 JPEG with boxes overlaid>"
+}
+```
+
+`bbox` coordinates are in pixels of the original (EXIF-corrected) image. `predictions` is an empty list when nothing clears the confidence threshold.
+
+#### Instance segmentation
+
+For models uploaded as `InstanceSegmentationPredictor`. `parameters.confidence` filters detections (default `0.5`).
+
+Per-image response:
+
+```json
+{
+  "status": "success",
+  "predictions": [
+    {"class": "person", "score": 0.89, "bbox": {"x1": 100.5, "y1": 50.2, "x2": 300.8, "y2": 400.1}}
+  ],
+  "debug_image": "<base64 JPEG with masks overlaid>"
+}
+```
+
+Per-instance mask arrays are **not** included in the response by default (too large). The annotated mask overlay is baked into `debug_image`.
+
+#### Semantic segmentation
+
+For models uploaded as `SemanticSegmentationPredictor`. `parameters.confidence` is the per-pixel threshold above which a class is considered "valid" (default `0.5`).
+
+Per-image response:
+
+```json
+{
+  "status": "success",
+  "predictions": {
+    "class_mask": "<base64 PNG, uint8, per-pixel class id>",
+    "valid_mask": "<base64 PNG, uint8, 0=below threshold, 1=above>"
+  },
+  "debug_image": "<base64 JPEG with color-coded overlay>"
+}
+```
+
+`class_mask` always paints every pixel with the argmax winner. `valid_mask` tells you which pixels actually cleared the confidence threshold — AND them together client-side to get the "real" segmentation.
+
+### XGBoost / scikit-learn Endpoint
+
+Image: `us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xgboost-scikit-learn:<tag>`
+
+For models uploaded via `upload_model_joblib` — sklearn pipelines, xgboost models, or anything `joblib.load`-able with a `.predict(DataFrame)` method.
+
+Request shape — `instances` is a list of dicts, one row per input:
+
+```json
+{
+  "instances": [
+    {"pclass": 1, "sex": "female", "age": 29, "fare": 100.0, "embarked": "S"},
+    {"pclass": 3, "sex": "male", "age": 35, "fare": 8.05, "embarked": "S"}
+  ]
+}
+```
+
+The server constructs `pd.DataFrame(instances)` and calls `model.predict(df)` on it. The columns your pipeline expects must be present in each instance dict.
+
+Response shape — one prediction per input row:
+
+```json
+{
+  "predictions": [0, 1]
+}
+```
+
+Each element is whatever your `.predict()` returns — a class label for classifiers, a numeric value for regressors, an array for multi-output models.
+
+`parameters` is ignored — there's no per-request configuration for this image.
+
+---
+
 ## Color Schemes
 
 For predictors that support annotation (`BoundingBoxPredictor`, `InstanceSegmentationPredictor`, `SemanticSegmentationPredictor`), you can set a custom color scheme:
