@@ -1,8 +1,8 @@
 XGBOOST_SCIKIT_LEARN := us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xgboost-scikit-learn
-XGBOOST_TAG := v2.4.1
+XGBOOST_TAG := v2.4.2
 
 IMAGE_ONNX := us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx
-IMAGE_ONNX_TAG := v2.4.1
+IMAGE_ONNX_TAG := v2.4.2
 
 GOOGLE_CLOUD_PROJECT ?=
 REGION ?= us-west1
