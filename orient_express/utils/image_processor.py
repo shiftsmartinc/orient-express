@@ -1,6 +1,9 @@
 import base64
+import ipaddress
 import logging
+import socket
 from io import BytesIO
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -8,6 +11,34 @@ from PIL import Image, ExifTags
 import requests
 
 from .gs import get_gcs_from_http_url, read_file_bytes
+
+DOWNLOAD_TIMEOUT_SECONDS = 30
+
+
+class UnsafeUrlError(ValueError):
+    pass
+
+
+def validate_url(http_url):
+    # Reject URLs that could be used for SSRF: the request runs server-side
+    # with the service account's network access, so only allow http(s) URLs
+    # that resolve to public IPs (blocks the GCE metadata server, localhost,
+    # and private/internal ranges).
+    parsed = urlparse(http_url)
+    if parsed.scheme not in ("http", "https"):
+        raise UnsafeUrlError(f"unsupported URL scheme: {parsed.scheme}")
+    if not parsed.hostname:
+        raise UnsafeUrlError("URL has no hostname")
+    try:
+        addr_infos = socket.getaddrinfo(parsed.hostname, None)
+    except socket.gaierror as e:
+        raise UnsafeUrlError(f"could not resolve host: {parsed.hostname}") from e
+    for addr_info in addr_infos:
+        ip = ipaddress.ip_address(addr_info[4][0])
+        if not ip.is_global:
+            raise UnsafeUrlError(
+                f"URL host {parsed.hostname} resolves to non-public address {ip}"
+            )
 
 
 def read_image_from_url(http_url, http_as_gcs=False) -> Image.Image:
@@ -19,7 +50,8 @@ def read_image_from_url(http_url, http_as_gcs=False) -> Image.Image:
         if gs_uri:
             return read_image_from_gs(gs_uri)
 
-    response = requests.get(http_url)
+    validate_url(http_url)
+    response = requests.get(http_url, timeout=DOWNLOAD_TIMEOUT_SECONDS)
     response.raise_for_status()
     image = Image.open(BytesIO(response.content))
     return image

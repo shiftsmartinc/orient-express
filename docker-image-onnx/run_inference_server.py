@@ -126,16 +126,24 @@ class OnnxImageModel(Model):
     def download_image(self, image_address):
         if image_address.startswith("http"):
             # http url
+            logging.info(f"[{self.name}] image source: http url {image_address}")
             image = read_image_from_url(image_address)
         elif image_address.startswith("gs://"):
             # gs uri
+            logging.info(f"[{self.name}] image source: gcs uri {image_address}")
             image = read_image_from_gs(image_address)
         elif image_address.startswith("data:"):
             # data URI format: data:image/png;base64,iVBORw0KGgo...
             base64_data = image_address.split(",", 1)[1]
+            logging.info(
+                f"[{self.name}] image source: base64 data uri ({len(base64_data)} base64 chars)"
+            )
             image = base64_to_image(base64_data)
         else:
             # raw base64
+            logging.info(
+                f"[{self.name}] image source: raw base64 ({len(image_address)} base64 chars)"
+            )
             image = base64_to_image(image_address)
         return image
 
