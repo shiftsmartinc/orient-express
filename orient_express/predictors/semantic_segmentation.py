@@ -2,8 +2,6 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-import torch
-import torch.nn.functional as F
 from PIL import Image
 
 from ..utils.image_processor import (
@@ -11,6 +9,7 @@ from ..utils.image_processor import (
     mask_to_base64,
     opencv_to_pil,
     pil_to_opencv,
+    resize_masks,
 )
 from .predictor import ImagePredictor, OnnxSessionWrapper
 
@@ -49,14 +48,7 @@ class OnnxSemanticSegmentation(OnnxSessionWrapper):
 
             h, w = int(target_sizes[i][0]), int(target_sizes[i][1])
 
-            filtered_masks_torch = torch.from_numpy(filtered_masks).unsqueeze(1)
-            resized_masks_torch = F.interpolate(
-                filtered_masks_torch,
-                size=(h, w),
-                mode="bilinear",
-                align_corners=False,
-            )
-            resized_masks = resized_masks_torch.squeeze(1).numpy()
+            resized_masks = resize_masks(filtered_masks, h, w)
 
             results.append(resized_masks)
 

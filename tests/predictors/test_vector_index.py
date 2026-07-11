@@ -450,10 +450,9 @@ class TestBuildVectorIndex:
         p = tmp_path / "image.png"
         img.save(str(p))
 
-        from orient_express.predictors.vector_index import _CropDataset
+        from orient_express.predictors.vector_index import _load_crop
 
-        dataset = _CropDataset([CropSpec(path=str(p), bbox=(30, 20, 60, 40))])
-        crop = dataset[0]
+        crop = _load_crop(CropSpec(path=str(p), bbox=(30, 20, 60, 40)))
         crop_arr = np.array(crop)
         assert crop.size == (30, 20)
         assert np.all(crop_arr[:, :, 0] == 255)

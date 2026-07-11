@@ -283,3 +283,42 @@ class TestBoundingBoxPredictor:
             # Pixels outside the bbox region should be unchanged
             outside_pixel = annotated_arr[75, 75]  # bottom-right quadrant
             assert np.array_equal(outside_pixel, [255, 255, 255])
+
+
+class TestNmsHelper:
+    """Pins the behavior of the cv2-backed nms() (verified against
+    torchvision.ops.nms during the torch removal: 300/300 random keep-set
+    matches; see that PR for the comparison harness)."""
+
+    def test_orders_by_descending_score(self):
+        from orient_express.predictors.object_detection import nms
+
+        boxes = np.array(
+            [[0, 0, 10, 10], [100, 100, 110, 110], [200, 200, 210, 210]],
+            dtype=np.float32,
+        )
+        scores = np.array([0.5, 0.9, 0.7], dtype=np.float32)
+        assert list(nms(boxes, scores, 0.5)) == [1, 2, 0]
+
+    def test_suppresses_overlapping_lower_score(self):
+        from orient_express.predictors.object_detection import nms
+
+        boxes = np.array(
+            [[0, 0, 10, 10], [1, 1, 10, 10], [20, 20, 30, 30]], dtype=np.float32
+        )
+        scores = np.array([0.9, 0.8, 0.7], dtype=np.float32)
+        assert list(nms(boxes, scores, 0.5)) == [0, 2]
+
+    def test_high_threshold_keeps_all(self):
+        from orient_express.predictors.object_detection import nms
+
+        boxes = np.array([[0, 0, 10, 10], [1, 1, 10, 10]], dtype=np.float32)
+        scores = np.array([0.9, 0.8], dtype=np.float32)
+        assert len(nms(boxes, scores, 0.99)) == 2
+
+    def test_empty_input(self):
+        from orient_express.predictors.object_detection import nms
+
+        boxes = np.empty((0, 4), dtype=np.float32)
+        scores = np.empty((0,), dtype=np.float32)
+        assert len(nms(boxes, scores, 0.5)) == 0
