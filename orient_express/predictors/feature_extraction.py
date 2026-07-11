@@ -35,6 +35,13 @@ class FeatureExtractionPredictor(ImagePredictor):
         self.model = self.backend_model(model_path, device)
         self.model_path = model_path
 
+    @classmethod
+    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu"):
+        if "model_file" not in metadata:
+            raise Exception("No model_file defined in metadata.yaml")
+        onnx_path = os.path.join(dir, metadata["model_file"])
+        return cls(onnx_path, device)
+
     def predict(self, images: list[Image.Image]) -> list[FeaturePrediction]:
         if not images:
             return []

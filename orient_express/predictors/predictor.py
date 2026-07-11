@@ -32,9 +32,32 @@ def get_image_onnx_container_uri() -> str:
     return f"{IMAGE_ONNX_IMAGE_REPO}:{tag}"
 
 
+# model_type string (persisted in every uploaded metadata.yaml) -> class.
+# Populated automatically when a Predictor subclass defines `model_type`.
+PREDICTOR_REGISTRY: dict[str, type["Predictor"]] = {}
+
+
 class Predictor(ABC):
     model_type: str
     model_path: str
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        model_type = cls.__dict__.get("model_type")
+        if isinstance(model_type, str):
+            existing = PREDICTOR_REGISTRY.get(model_type)
+            if existing is not None and existing is not cls:
+                raise ValueError(
+                    f"model_type '{model_type}' is already registered by "
+                    f"{existing.__name__}; model_type strings must be unique "
+                    "(they are persisted in uploaded model metadata)"
+                )
+            PREDICTOR_REGISTRY[model_type] = cls
+
+    @classmethod
+    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu") -> "Predictor":
+        """Construct this predictor from a downloaded artifact directory."""
+        raise NotImplementedError(f"{cls.__name__} does not implement from_dir")
 
     @abstractmethod
     def get_serving_container_image_uri(self) -> str:
@@ -63,6 +86,15 @@ class ImagePredictor(Predictor):
         self.color_scheme = generate_color_scheme(list(classes.values()))
         self.classes = classes
         self.model_path = model_path
+
+    @classmethod
+    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu"):
+        if "model_file" not in metadata:
+            raise Exception("No model_file defined in metadata.yaml")
+        if "classes" not in metadata:
+            raise Exception("No classes defined in metadata.yaml")
+        onnx_path = os.path.join(dir, metadata["model_file"])
+        return cls(onnx_path, metadata["classes"], device)
 
     def get_serving_container_image_uri(self):
         return get_image_onnx_container_uri()
