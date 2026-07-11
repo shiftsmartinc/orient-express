@@ -15,8 +15,21 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 class InstanceSegmentationPrediction:
     clss: str
     score: float
-    bbox: np.ndarray  # x1, y1, x2, y2
+    bbox: np.ndarray  # x1, y1, x2, y2 in original-image pixels
+    # Raw model-resolution mask (float, unresized model output). Full-size
+    # masks are ~2 MB each as booleans, so they are materialized on demand
+    # via resized_mask(image) / InstanceSegmentationPredictor.resize_masks()
+    # instead of at predict time.
     mask: np.ndarray
+
+    def resized_mask(self, image: Image.Image) -> np.ndarray:
+        """This prediction's mask resized to fit `image` (bool).
+
+        It is the caller's responsibility to pass the image this prediction
+        was made on.
+        """
+        width, height = image.size
+        return resize_masks(self.mask[None].astype(np.float32), height, width)[0] > 0.0
 
     def to_dict(self, include_mask: bool = False):
         dict_repr = {
@@ -30,6 +43,8 @@ class InstanceSegmentationPrediction:
             },
         }
         if include_mask:
+            # raw model-resolution mask; resize via resized_mask(image) /
+            # InstanceSegmentationPredictor.resize_masks(image, predictions)
             dict_repr["mask"] = self.mask.tolist()
         return dict_repr
 
@@ -66,18 +81,10 @@ class OnnxInstanceSegmentation(OnnxSessionWrapper):
             filtered_boxes = boxes[i][valid_mask]
             filtered_scores = scores[i][valid_mask]
             filtered_labels = labels[i][valid_mask]
-            # masks are [num_valid, H_mask, W_mask]
-            # H_mask and W_mask tend to be small, around 100 pixels, so we need
-            # to resize them. Since the images in the batch can be of different
-            # sizes, we can't resize them in the onnx graph.
+            # masks stay at model resolution ([num_valid, H_mask, W_mask],
+            # typically ~100x100); resizing to image size happens lazily via
+            # resized_mask(image) / resize_masks(image, predictions).
             filtered_masks = masks[i][valid_mask]
-
-            h, w = int(target_sizes[i][0]), int(target_sizes[i][1])
-
-            if len(filtered_masks) > 0:
-                resized_masks = resize_masks(filtered_masks, h, w) > 0.0
-            else:
-                resized_masks = np.empty((0, h, w), dtype=bool)
 
             result = np.column_stack(
                 [
@@ -87,7 +94,7 @@ class OnnxInstanceSegmentation(OnnxSessionWrapper):
                 ]
             )
 
-            results.append((result, resized_masks))
+            results.append((result, filtered_masks))
 
         return results
 
@@ -120,6 +127,27 @@ class InstanceSegmentationPredictor(ImagePredictor):
             )
         return outputs
 
+    def resize_masks(
+        self,
+        image: Image.Image,
+        predictions: list[InstanceSegmentationPrediction],
+        index: int | None = None,
+    ) -> np.ndarray:
+        """Resize prediction masks to fit `image` (bool).
+
+        Resizes all masks by default (returned as an (N, H, W) array, one
+        batched threaded operation); pass index to resize a single
+        prediction's mask (returned as (H, W)). It is the caller's
+        responsibility to pass the image the predictions were made on.
+        """
+        if index is not None:
+            return predictions[index].resized_mask(image)
+        if not predictions:
+            return np.empty((0, 0, 0), dtype=bool)
+        width, height = image.size
+        stacked = np.stack([pred.mask for pred in predictions]).astype(np.float32)
+        return resize_masks(stacked, height, width) > 0.0
+
     def get_annotated_image(
         self,
         image: Image.Image,
@@ -129,15 +157,39 @@ class InstanceSegmentationPredictor(ImagePredictor):
         font_scale: float | None = None,
     ) -> Image.Image:
         opencv_image = pil_to_opencv(image)
-        mask_overlay = opencv_image.copy()
 
-        for pred in predictions:
-            fill_color = self.color_scheme.get(pred.clss, (120, 120, 120))
-            mask_overlay[pred.mask] = fill_color[:3]
+        if predictions:
+            # Draw all model-resolution masks onto one model-resolution
+            # canvas, then resize that single canvas to the image size —
+            # instead of resizing every mask to full resolution.
+            mask_h, mask_w = predictions[0].mask.shape
+            overlay = np.zeros((mask_h, mask_w, 3), dtype=np.uint8)
+            coverage = np.zeros((mask_h, mask_w), dtype=bool)
+            for pred in predictions:
+                fill_color = self.color_scheme.get(pred.clss, (120, 120, 120))
+                mask = pred.mask > 0.0
+                overlay[mask] = fill_color[:3]
+                coverage |= mask
 
-        annotated_image = cv2.addWeighted(
-            mask_overlay, mask_opacity, opencv_image, 1 - mask_opacity, 0
-        )
+            height, width = opencv_image.shape[:2]
+            overlay_full = cv2.resize(
+                overlay, (width, height), interpolation=cv2.INTER_NEAREST
+            )
+            coverage_full = (
+                cv2.resize(
+                    coverage.astype(np.uint8),
+                    (width, height),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                > 0
+            )
+
+            blended = cv2.addWeighted(
+                overlay_full, mask_opacity, opencv_image, 1 - mask_opacity, 0
+            )
+            annotated_image = np.where(coverage_full[..., None], blended, opencv_image)
+        else:
+            annotated_image = opencv_image
 
         if draw_indices:
             class_counts = defaultdict(int)

@@ -1002,7 +1002,7 @@ class TestGetLocalPredictor:
 
         with (
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
-            patch("orient_express.vertex.get_predictor") as mock_get_predictor,
+            patch("orient_express.predictors.get_predictor") as mock_get_predictor,
         ):
             mock_get_predictor.return_value = MagicMock()
 
