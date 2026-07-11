@@ -25,7 +25,14 @@ equivalence-docker: build_local_image_onnx
 	ORIENT_EXPRESS_TEST_DOCKER_IMAGE=$(IMAGE_ONNX):$(IMAGE_ONNX_TAG)_local \
 	uv run pytest tests/equivalence -v
 
-.PHONY: install fmt lint test equivalence equivalence-docker
+# Work on a gitignored copy of the committed test notebook so ad-hoc cell
+# edits and outputs never end up in a commit. To update the committed
+# template, deliberately edit test_docker_image.ipynb itself.
+scratch-notebook:
+	cp -n test_docker_image.ipynb test_docker_image.local.ipynb
+	@echo "Opened copy: test_docker_image.local.ipynb (gitignored)"
+
+.PHONY: install fmt lint test equivalence equivalence-docker scratch-notebook
 
 # --- Docker images ---
 # Image tags track the library version in pyproject.toml (see

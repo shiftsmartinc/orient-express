@@ -216,6 +216,17 @@ All ONNX image models share these requirements:
 - **Input images are resized using simple stretch** (no letterboxing/padding) to the model's expected resolution before inference.
 - **Normalization must be baked into the ONNX graph.** The library passes uint8 RGB images directly to the model; any normalization (e.g., ImageNet mean/std) must be handled inside the graph.
 - **Batch dimension**: Models receive batched inputs with shape `[batch, height, width, 3]`.
+- **Score outputs must be probabilities, not logits.** Confidence thresholds are applied to the raw output values, so apply softmax/sigmoid inside the graph.
+
+#### Class ID conventions
+
+The `classes` dict (`{int: str}`) maps model outputs to class names, but the mapping convention differs by predictor type — an off-by-one here produces plausible-looking but wrong labels, so double-check when exporting:
+
+| Predictor type | How `classes` keys are interpreted |
+| --- | --- |
+| Classification, multi-label | **1-indexed** relative to score columns: class id `N` reads score column `N - 1`. `{1: "cat", 2: "dog"}` means column 0 is cat. |
+| Object detection, instance segmentation | The label values the model emits are looked up **directly** as `classes` keys, no offset. |
+| Semantic segmentation | The **channel index** of the masks output is looked up directly as a `classes` key (channel 0 ↔ key `0`). |
 
 ### ClassificationPredictor
 
@@ -452,9 +463,9 @@ For semantic segmentation models that output per-pixel class predictions.
 |             |                                                                               |
 | ----------- | ----------------------------------------------------------------------------- |
 | **Inputs**  | `images`: `[batch, height, width, 3]` uint8 RGB                               |
-| **Outputs** | `masks`: `[batch, num_classes, mask_height, mask_width]` float32 class logits |
+| **Outputs** | `masks`: `[batch, num_classes, mask_height, mask_width]` float32 class probabilities |
 
-Masks can be any resolution—they are resized to original image dimensions in Python postprocessing. The class dimension is reduced via argmax to produce a single class ID per pixel.
+Masks can be any resolution—they are resized to original image dimensions in Python postprocessing. The class dimension is reduced via argmax to produce a single class ID per pixel. The output values must be probabilities (softmax/sigmoid inside the graph), because the per-pixel validity mask thresholds the max class probability against the `confidence` parameter.
 
 #### Usage
 

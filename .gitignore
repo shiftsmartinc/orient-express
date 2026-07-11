@@ -174,3 +174,4 @@ orient_express/artifacts/
 test-output/
 *.joblib
 /test.ipynb
+*.local.ipynb
