@@ -57,3 +57,8 @@ class ClassificationPredictor(ImagePredictor):
         self, image: Image.Image, predictions: ClassificationPrediction
     ):
         return None
+
+    def to_response(self, image, prediction, include_debug: bool = True):
+        # Historical (pre-to_response) response shape for classification:
+        # flat prediction fields with a status key, no debug image.
+        return {**prediction.to_dict(), "status": "success"}

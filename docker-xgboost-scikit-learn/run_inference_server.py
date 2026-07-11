@@ -1,4 +1,3 @@
-import json
 import logging
 import logging.config
 import os
@@ -7,6 +6,7 @@ import pandas as pd
 from kserve import Model, ModelServer
 
 from orient_express.predictors import get_predictor
+from orient_express.serving import decode_input
 from orient_express.vertex import ARTIFACT_DIR, download_artifacts
 
 
@@ -28,22 +28,13 @@ class ScikitLearnPipelineModel(Model):
 
     def predict(self, inputs, *args, **kwargs):
         logging.info(f"[{self.name}] executing prediction")
-        decoded_input = self.decode_input(inputs)
+        decoded_input = decode_input(inputs)
 
         input_df = pd.DataFrame(decoded_input["instances"])
 
         predictions = self.model.predict(input_df)
         response = {"predictions": predictions.tolist()}
         return response
-
-    def decode_input(self, input_data):
-        logging.info(f"PayloadType: {type(input_data)}")
-        if isinstance(input_data, (bytes, str)):
-            return json.loads(input_data)
-        elif isinstance(input_data, dict):
-            return input_data
-        else:
-            raise Exception(f"Unsupported payload type {type(input_data)}")
 
 
 if __name__ == "__main__":
