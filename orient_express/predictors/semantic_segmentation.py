@@ -7,7 +7,12 @@ import torch
 import torch.nn.functional as F
 
 from .predictor import OnnxSessionWrapper, ImagePredictor
-from ..utils.image_processor import mask_to_base64, pil_to_opencv, opencv_to_pil
+from ..utils.image_processor import (
+    array_to_base64_npy,
+    mask_to_base64,
+    pil_to_opencv,
+    opencv_to_pil,
+)
 
 
 @dataclass
@@ -22,7 +27,8 @@ class SemanticSegmentationPrediction:
             "valid_mask": mask_to_base64(self.valid_mask.astype(np.uint8)),
         }
         if include_conf_masks:
-            dict_repr["conf_masks"] = self.conf_masks.tolist()
+            # float32 (C, H, W) — PNG can't hold floats, so ship lossless .npy
+            dict_repr["conf_masks"] = array_to_base64_npy(self.conf_masks)
         return dict_repr
 
 

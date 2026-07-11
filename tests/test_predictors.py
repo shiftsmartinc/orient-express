@@ -1149,6 +1149,10 @@ class TestSemanticSegmentationPredictor:
 
             result_dict_with_conf = results[0].to_dict(include_conf_masks=True)
             assert "conf_masks" in result_dict_with_conf
+            decoded_conf = np.load(
+                io.BytesIO(base64.b64decode(result_dict_with_conf["conf_masks"]))
+            )
+            np.testing.assert_array_equal(decoded_conf, results[0].conf_masks)
 
     def test_annotation_class_colors(
         self, mock_semantic_session, checkerboard_image, class_mapping, color_scheme

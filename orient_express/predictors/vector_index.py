@@ -230,7 +230,7 @@ def build_vector_index(
         crops: images to extract features from. Each element can be a PIL
             Image (used directly), a file path string (loaded as a whole
             image), or a CropSpec (loaded and cropped to the specified bbox).
-        labels: one label per crop. labels can be any hashable type, includeing
+        labels: one label per crop. labels can be any hashable type, including
             iterables like tuples.
         feature_extractor: anything with a .predict(list[Image]) method that
             returns objects with a .feature attribute (e.g. FeatureExtractionPredictor).

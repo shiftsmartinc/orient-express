@@ -112,6 +112,16 @@ def mask_to_base64(mask: np.ndarray) -> str:
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
 
+def array_to_base64_npy(array: np.ndarray) -> str:
+    """Encode an arbitrary-dtype array as base64 .npy bytes (lossless).
+
+    Decode with np.load(BytesIO(base64.b64decode(data))).
+    """
+    buffered = BytesIO()
+    np.save(buffered, array)
+    return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+
 def image_to_bytes(image):
     buffered = BytesIO()
     if image.mode == "RGBA":

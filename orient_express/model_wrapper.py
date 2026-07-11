@@ -1,8 +1,6 @@
-import os
 from typing import Optional
 
 import joblib
-import logging
 import pandas as pd
 from google.cloud import storage
 from google.cloud import aiplatform
@@ -59,6 +57,8 @@ class ModelExpress:
 
         if model_loader is None:
             self.model_loader = JoblibSimpleLoader(model=model)
+        else:
+            self.model_loader = model_loader
 
         self.serving_container_image_uri = serving_container_image_uri
         self.serving_container_predict_route = serving_container_predict_route
@@ -229,14 +229,14 @@ class ModelExpress:
 
         vertex_model = self.get_latest_vertex_model(self.model_name)
 
+        if not vertex_model:
+            raise Exception(f"Model '{self.model_name}' not found in the registry.")
+
         if self.model_version:
             # reload the model using a specific model version
             vertex_model = aiplatform.Model(
                 model_name=vertex_model.resource_name, version=str(self.model_version)
             )
-
-        if not vertex_model:
-            raise Exception(f"Model '{self.model_name}' not found in the registry.")
 
         artifact_uri = vertex_model.gca_resource.artifact_uri
         self.download_artifacts_from_uri(artifact_uri)

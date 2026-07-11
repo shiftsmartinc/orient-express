@@ -16,7 +16,7 @@ from datetime import datetime
 import tempfile
 import os
 
-# Import the module for accessing globals like _vertex_initialized
+# Import the module for accessing globals like _last_vertex_init
 import orient_express.vertex as vertex_module
 
 from orient_express.vertex import (
@@ -861,23 +861,49 @@ class TestEndpointManagement:
 # -----------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def reset_vertex_init_state():
+    """Keep the module-global init state from leaking between tests."""
+    vertex_module._last_vertex_init = None
+    yield
+    vertex_module._last_vertex_init = None
+
+
 class TestVertexInit:
     """Tests for vertex_init initialization."""
 
-    def test_initializes_aiplatform_once(self):
-        """vertex_init only calls aiplatform.init once."""
-        # Reset the global state
-        vertex_module._vertex_initialized = False
+    def test_initializes_aiplatform_every_call(self):
+        """vertex_init calls aiplatform.init on every call (last call wins)."""
+        vertex_module._last_vertex_init = None
 
         with patch("orient_express.vertex.aiplatform.init") as mock_init:
             vertex_init("project1", "us-central1")
             vertex_init("project1", "us-central1")
+
+            assert mock_init.call_count == 2
+            mock_init.assert_called_with(project="project1", location="us-central1")
+
+    def test_same_project_region_does_not_warn(self, recwarn):
+        """Repeated init with identical project/region emits no warning."""
+        vertex_module._last_vertex_init = None
+
+        with patch("orient_express.vertex.aiplatform.init"):
+            vertex_init("project1", "us-central1")
             vertex_init("project1", "us-central1")
 
-            # Should only be called once despite multiple calls
-            mock_init.assert_called_once_with(
-                project="project1", location="us-central1"
-            )
+        assert len(recwarn) == 0
+
+    def test_changing_project_or_region_warns(self):
+        """Re-init with a different project/region warns about global SDK state."""
+        vertex_module._last_vertex_init = None
+
+        with patch("orient_express.vertex.aiplatform.init") as mock_init:
+            vertex_init("project1", "us-central1")
+            with pytest.warns(UserWarning, match="re-initialized"):
+                vertex_init("project2", "us-west1")
+
+            # The new project/region still takes effect
+            mock_init.assert_called_with(project="project2", location="us-west1")
 
 
 # -----------------------------------------------------------------------------
