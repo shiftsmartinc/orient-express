@@ -4,11 +4,7 @@ import os
 import tempfile
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-<<<<<<< HEAD
 from typing import TYPE_CHECKING, Any, TypeVar, overload
-=======
-from typing import Any, TypeVar, overload
->>>>>>> f794b3a (Add predictor registry and typed loading)
 
 import joblib
 import yaml
@@ -17,12 +13,9 @@ from google.cloud.storage import transfer_manager
 
 from .utils.paths import get_cache_dir
 
-<<<<<<< HEAD
 if TYPE_CHECKING:
     from .predictors import Predictor
 
-=======
->>>>>>> f794b3a (Add predictor registry and typed loading)
 T = TypeVar("T")
 
 ARTIFACT_DIR = get_cache_dir()
@@ -138,12 +131,9 @@ class VertexModel:
                 expected_type=BoundingBoxPredictor
             )
         """
-<<<<<<< HEAD
         # Deferred: pulls onnxruntime/cv2, which vertex-only users never need
         from .predictors import get_predictor
 
-=======
->>>>>>> f794b3a (Add predictor registry and typed loading)
         dir = os.path.join(ARTIFACT_DIR, self.model_name + "-" + str(self.version))
         self.download_artifacts(dir, force_download=force_download)
         if expected_type is None:
