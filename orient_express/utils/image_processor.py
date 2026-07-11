@@ -43,7 +43,7 @@ def validate_url(http_url):
             )
 
 
-def read_image_from_url(http_url, http_as_gcs=False) -> Image.Image:
+def read_image_from_url(http_url, http_as_gcs=False, session=None) -> Image.Image:
     # Extract GSC URI from http link and download the file directly.
     # It will increase reliability, as it will use GCP driver to fetch data
     # If URL is not GCS HTTP URL, download it through HTTP
@@ -53,7 +53,8 @@ def read_image_from_url(http_url, http_as_gcs=False) -> Image.Image:
             return read_image_from_gs(gs_uri)
 
     validate_url(http_url)
-    response = requests.get(http_url, timeout=DOWNLOAD_TIMEOUT_SECONDS)
+    client = session if session is not None else requests
+    response = client.get(http_url, timeout=DOWNLOAD_TIMEOUT_SECONDS)
     response.raise_for_status()
     image = Image.open(BytesIO(response.content))
     return image

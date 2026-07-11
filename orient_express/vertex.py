@@ -38,6 +38,7 @@ class VertexModel:
         self.project_name = project_name
         self.region = region
         self.version = version
+        self._endpoint_cache: dict[str, Any] = {}
 
     def deploy_to_endpoint(
         self,
@@ -63,18 +64,26 @@ class VertexModel:
             return self.create_endpoint(endpoint_name)
 
     def get_endpoint(self, endpoint_name: str):
+        # Endpoint.list is a full API round-trip; resolve each name once per
+        # VertexModel so repeated remote_predict calls don't pay it again.
+        cached = self._endpoint_cache.get(endpoint_name)
+        if cached is not None:
+            return cached
         endpoints = aiplatform.Endpoint.list(
             filter=f"display_name={endpoint_name}", order_by="create_time"
         )
         if endpoints:
+            self._endpoint_cache[endpoint_name] = endpoints[0]
             return endpoints[0]
 
     def create_endpoint(self, endpoint_name: str):
-        return aiplatform.Endpoint.create(
+        endpoint = aiplatform.Endpoint.create(
             display_name=endpoint_name,
             project=self.project_name,
             location=self.region,
         )
+        self._endpoint_cache[endpoint_name] = endpoint
+        return endpoint
 
     def remote_predict(
         self, endpoint_name: str, instances: list, parameters: dict | None = None

@@ -7,6 +7,10 @@ dependency-group package that only exists inside the Docker images.
 import inspect
 import json
 import logging
+import threading
+
+import requests
+import requests.adapters
 
 from .utils.image_processor import (
     base64_to_image,
@@ -14,6 +18,27 @@ from .utils.image_processor import (
     read_image_from_url,
 )
 from .utils.retry import retry
+
+_http_session: requests.Session | None = None
+_http_session_lock = threading.Lock()
+
+
+def get_http_session() -> requests.Session:
+    """Shared session so per-image downloads reuse connections (keep-alive)
+    instead of paying DNS + TCP + TLS setup per request."""
+    global _http_session
+    if _http_session is None:
+        with _http_session_lock:
+            if _http_session is None:
+                session = requests.Session()
+                adapter = requests.adapters.HTTPAdapter(
+                    pool_connections=8, pool_maxsize=32
+                )
+                session.mount("https://", adapter)
+                session.mount("http://", adapter)
+                _http_session = session
+    return _http_session
+
 
 # Defaults the server supplies when a predictor's predict() requires a
 # parameter the request didn't provide.
@@ -38,7 +63,7 @@ def decode_input(input_data):
 def download_image(image_address):
     if image_address.startswith("http"):
         logging.info(f"image source: http url {image_address}")
-        return read_image_from_url(image_address)
+        return read_image_from_url(image_address, session=get_http_session())
     elif image_address.startswith("gs://"):
         logging.info(f"image source: gcs uri {image_address}")
         return read_image_from_gs(image_address)
