@@ -1,26 +1,19 @@
 FROM ubuntu:24.04
-RUN apt update && apt install -y python3 python3-pip
-RUN pip config set global.break-system-packages true
-RUN pip install poetry poetry-plugin-export
+COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /uvx /bin/
+ENV UV_LINK_MODE=copy UV_PYTHON_INSTALL_DIR=/python
 WORKDIR /app
-COPY docker-xgboost-scikit-learn/ .
-COPY poetry.lock .
-COPY pyproject.toml .
-COPY README.md .
+
+# Dependency layer: torch/torchvision resolve from the PyTorch CPU index via
+# tool.uv.sources in pyproject.toml; onnxruntime-gpu (selected by platform
+# marker) is skipped and replaced with CPU onnxruntime below.
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --frozen --no-install-project --no-dev --group server \
+    --no-install-package onnxruntime-gpu
+
+COPY README.md ./
 COPY orient_express/ orient_express/
-RUN poetry config virtualenvs.create false
-RUN poetry export --without-hashes --only main,server -o requirements.txt
-RUN if [ "$(uname -m)" = "x86_64" ]; then \
-        grep -v -E '^(nvidia-|triton==|torch==|torchvision==|xgboost==|onnxruntime-gpu==)' requirements.txt > requirements.cpu && \
-        mv requirements.cpu requirements.txt && \
-        TORCH_VERSION=$(grep -A1 '^name = "torch"$' poetry.lock | grep '^version' | sed 's/.*"\(.*\)".*/\1/') && \
-        TORCHVISION_VERSION=$(grep -A1 '^name = "torchvision"$' poetry.lock | grep '^version' | sed 's/.*"\(.*\)".*/\1/') && \
-        XGBOOST_VERSION=$(grep -A1 '^name = "xgboost"$' poetry.lock | grep '^version' | sed 's/.*"\(.*\)".*/\1/') && \
-        ONNXRUNTIME_VERSION=$(grep -A1 '^name = "onnxruntime-gpu"$' poetry.lock | grep '^version' | sed 's/.*"\(.*\)".*/\1/') && \
-        pip install --index-url https://download.pytorch.org/whl/cpu \
-            torch==$TORCH_VERSION torchvision==$TORCHVISION_VERSION && \
-        pip install --no-deps xgboost==$XGBOOST_VERSION && \
-        pip install onnxruntime==$ONNXRUNTIME_VERSION; \
-    fi
-RUN pip install -r requirements.txt
-ENTRYPOINT ["python3", "run_inference_server.py"]
+RUN uv sync --frozen --no-dev --group server --no-install-package onnxruntime-gpu \
+    && uv pip install "onnxruntime>=1.20,<2"
+
+COPY docker-xgboost-scikit-learn/ ./
+ENTRYPOINT ["/app/.venv/bin/python", "run_inference_server.py"]

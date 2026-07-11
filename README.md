@@ -18,17 +18,19 @@ Both workflows handle versioning, artifact storage in GCS, and integration with 
 pip install orient_express
 ```
 
-For local development:
+For local development (uses [uv](https://docs.astral.sh/uv/)):
 
 ```bash
-pip install -e .
+make install   # uv sync
+make test      # run the test suite
+make fmt       # format + autofix lint (run before committing)
+make lint      # check-only, same as CI
 ```
 
-Or with Poetry:
+Model-output equivalence testing (internal golden suite; produces an HTML
+before/after report): see `tests/equivalence/README.md` and the
+`make equivalence` / `make equivalence-docker` targets.
 
-```bash
-poetry install
-```
 
 ## Workflows
 

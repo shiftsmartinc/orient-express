@@ -1,6 +1,6 @@
 import logging
 import os
-from urllib.parse import urlparse, unquote
+from urllib.parse import unquote, urlparse
 
 from google.api_core.retry import Retry
 from google.cloud import storage

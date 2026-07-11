@@ -2,7 +2,6 @@ import pytest
 
 from orient_express.utils.image_processor import UnsafeUrlError, validate_url
 
-
 PUBLIC_ADDR_INFO = [(2, 1, 6, "", ("142.250.68.78", 0))]
 
 

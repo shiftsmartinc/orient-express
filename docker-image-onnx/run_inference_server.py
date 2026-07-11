@@ -1,24 +1,24 @@
+import json
 import logging
 import logging.config
 import os
-import json
 from concurrent.futures import ThreadPoolExecutor
 
-from kserve import ModelServer, Model
+from kserve import Model, ModelServer
 
+from orient_express.predictors import (
+    ClassificationPredictor,
+    get_predictor,
+)
 from orient_express.utils.image_processor import (
-    read_image_from_url,
-    read_image_from_gs,
+    base64_to_image,
     fix_rotation,
     image_to_base64,
-    base64_to_image,
+    read_image_from_gs,
+    read_image_from_url,
 )
 from orient_express.utils.retry import retry
-from orient_express.vertex import download_artifacts, ARTIFACT_DIR
-from orient_express.predictors import (
-    get_predictor,
-    ClassificationPredictor,
-)
+from orient_express.vertex import ARTIFACT_DIR, download_artifacts
 
 
 class OnnxImageModel(Model):
@@ -87,7 +87,7 @@ class OnnxImageModel(Model):
             with ThreadPoolExecutor() as executor:
                 futures = [
                     executor.submit(self.get_debug_image, image, prediction)
-                    for image, prediction in zip(images, model_predictions)
+                    for image, prediction in zip(images, model_predictions, strict=True)
                 ]
 
                 for pred_idx, future in enumerate(futures):

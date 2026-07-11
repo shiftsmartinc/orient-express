@@ -2,17 +2,17 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from PIL import Image
 import torch
 import torch.nn.functional as F
+from PIL import Image
 
-from .predictor import OnnxSessionWrapper, ImagePredictor
 from ..utils.image_processor import (
     array_to_base64_npy,
     mask_to_base64,
-    pil_to_opencv,
     opencv_to_pil,
+    pil_to_opencv,
 )
+from .predictor import ImagePredictor, OnnxSessionWrapper
 
 
 @dataclass

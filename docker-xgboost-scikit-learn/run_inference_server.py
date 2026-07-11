@@ -6,8 +6,8 @@ import os
 import pandas as pd
 from kserve import Model, ModelServer
 
-from orient_express.vertex import download_artifacts, ARTIFACT_DIR
 from orient_express.predictors import get_predictor
+from orient_express.vertex import ARTIFACT_DIR, download_artifacts
 
 
 class ScikitLearnPipelineModel(Model):

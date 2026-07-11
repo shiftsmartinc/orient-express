@@ -75,7 +75,10 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
         class_names = self.label_encoder.classes_
         # Combine class names with probabilities
         combined_output = [
-            [[class_name, prob] for class_name, prob in zip(class_names, sample_probs)]
+            [
+                [class_name, prob]
+                for class_name, prob in zip(class_names, sample_probs, strict=True)
+            ]
             for sample_probs in probabilities
         ]
         return combined_output

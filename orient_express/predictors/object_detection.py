@@ -2,12 +2,12 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from PIL import Image
 import torch
+from PIL import Image
 from torchvision.ops import nms
 
-from .predictor import OnnxSessionWrapper, ImagePredictor
-from ..utils.image_processor import pil_to_opencv, opencv_to_pil
+from ..utils.image_processor import opencv_to_pil, pil_to_opencv
+from .predictor import ImagePredictor, OnnxSessionWrapper
 
 
 @dataclass

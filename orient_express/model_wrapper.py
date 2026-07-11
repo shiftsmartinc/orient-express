@@ -1,13 +1,9 @@
-from typing import Optional
-
 import joblib
 import pandas as pd
-from google.cloud import storage
-from google.cloud import aiplatform
+from google.cloud import aiplatform, storage
 
 
 class BaseLoader:
-
     def dump(self) -> list[str]: ...
 
     def load(self) -> object: ...
@@ -35,14 +31,14 @@ class ModelExpress:
         model_name: str,
         project_name: str,
         bucket_name: str = None,
-        model_version: Optional[int] = None,
+        model_version: int | None = None,
         model: object = None,
         region: str = "us-central1",
         model_loader: BaseLoader = None,
         serving_container_image_uri: str = "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xgboost-scikit-learn:latest",
         serving_container_predict_route: str = "/v1/models/orient-express-model:predict",
         serving_container_health_route: str = "/v1/models/orient-express-model",
-        endpoint_name: Optional[str] = None,
+        endpoint_name: str | None = None,
         machine_type="n1-standard-4",
         min_replica_count: int = 1,
         max_replica_count: int = 1,

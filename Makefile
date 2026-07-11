@@ -1,8 +1,43 @@
+# --- Development ---
+
+install:
+	uv sync
+
+fmt:
+	uv run ruff format .
+	uv run ruff check --fix .
+
+lint:
+	uv run ruff check .
+	uv run ruff format --check .
+
+test:
+	uv run pytest
+
+# Golden equivalence suite (internal — see tests/equivalence/README.md).
+# Requires ORIENT_EXPRESS_TEST_MANIFEST and GCP application-default creds;
+# equivalence-docker additionally needs GOOGLE_CLOUD_PROJECT.
+equivalence:
+	uv run pytest tests/equivalence -v
+
+equivalence-docker: build_local_image_onnx
+	GOOGLE_CLOUD_PROJECT=$(GOOGLE_CLOUD_PROJECT) \
+	ORIENT_EXPRESS_TEST_DOCKER_IMAGE=$(IMAGE_ONNX):$(IMAGE_ONNX_TAG)_local \
+	uv run pytest tests/equivalence -v
+
+.PHONY: install fmt lint test equivalence equivalence-docker
+
+# --- Docker images ---
+# Image tags track the library version in pyproject.toml (see
+# get_image_onnx_container_uri in orient_express/predictors/predictor.py).
+
+VERSION := $(shell uv version --short)
+
 XGBOOST_SCIKIT_LEARN := us-west1-docker.pkg.dev/shiftsmart-api/orient-express/xgboost-scikit-learn
-XGBOOST_TAG := v2.4.2
+XGBOOST_TAG := v$(VERSION)
 
 IMAGE_ONNX := us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx
-IMAGE_ONNX_TAG := v2.4.2
+IMAGE_ONNX_TAG := v$(VERSION)
 
 GOOGLE_CLOUD_PROJECT ?=
 REGION ?= us-west1

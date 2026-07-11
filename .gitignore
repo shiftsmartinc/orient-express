@@ -172,3 +172,5 @@ orient_express/artifacts/
 
 # Local docker test outputs
 test-output/
+*.joblib
+/test.ipynb

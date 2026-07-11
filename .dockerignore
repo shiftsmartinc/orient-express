@@ -2,6 +2,9 @@ orient_express/artifacts
 **/*.onnx
 **/*.pth
 **/*.pt
+**/*.joblib
+**/*.ipynb
 **/__pycache__
+test-output
 .git
 .venv

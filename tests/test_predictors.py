@@ -13,37 +13,33 @@ import base64
 import io
 import os
 from collections import Counter
-
-import pytest
-import numpy as np
-from PIL import Image
 from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pytest
+from PIL import Image
 
 from orient_express.predictors import load_vector_index
 from orient_express.predictors.classification import (
-    ClassificationPredictor,
     ClassificationPrediction,
-)
-from orient_express.predictors.multi_label_classification import (
-    MultiLabelClassificationPredictor,
-    MultiLabelClassificationPrediction,
-)
-from orient_express.predictors.object_detection import (
-    BoundingBoxPredictor,
-    BoundingBoxPrediction,
+    ClassificationPredictor,
 )
 from orient_express.predictors.instance_segmentation import (
     InstanceSegmentationPredictor,
-    InstanceSegmentationPrediction,
+)
+from orient_express.predictors.multi_label_classification import (
+    MultiLabelClassificationPrediction,
+    MultiLabelClassificationPredictor,
+)
+from orient_express.predictors.object_detection import (
+    BoundingBoxPredictor,
 )
 from orient_express.predictors.semantic_segmentation import (
     SemanticSegmentationPredictor,
-    SemanticSegmentationPrediction,
 )
 from orient_express.predictors.vector_index import (
-    VectorIndex,
-    SearchResult,
     CropSpec,
+    VectorIndex,
     build_vector_index,
 )
 
@@ -798,9 +794,9 @@ class TestBoundingBoxPredictor:
             original_edge = original_arr[5, 25]
 
             # The edge should have changed (a rectangle was drawn)
-            assert not np.array_equal(
-                edge_pixel, original_edge
-            ), "Edge pixel should have changed"
+            assert not np.array_equal(edge_pixel, original_edge), (
+                "Edge pixel should have changed"
+            )
 
             # Pixels well inside the box should be unchanged (white)
             interior_pixel = annotated_arr[25, 25]
@@ -997,9 +993,9 @@ class TestInstanceSegmentationPredictor:
             original_pixel = original_arr[10, 10]
 
             # The masked pixel should be different from original (blending occurred)
-            assert not np.array_equal(
-                masked_pixel, original_pixel
-            ), "Masked pixel should be blended"
+            assert not np.array_equal(masked_pixel, original_pixel), (
+                "Masked pixel should be blended"
+            )
 
             # Pixel outside mask region (bottom-right) - should be unchanged
             outside_pixel = annotated_arr[75, 75]
@@ -1355,7 +1351,7 @@ class TestVectorIndex:
         query = normalized_vectors[0]
         results_1d = single_label_index.search(query, k=3)
         results_2d = single_label_index.search(query.reshape(1, -1), k=3)
-        for r1, r2 in zip(results_1d, results_2d):
+        for r1, r2 in zip(results_1d, results_2d, strict=True):
             assert r1.score == pytest.approx(r2.score)
             assert r1.labels == r2.labels
 
