@@ -1,15 +1,23 @@
 import os
 import tempfile
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 import joblib
 import yaml
 from google.cloud import aiplatform, storage
+from google.cloud.storage import transfer_manager
 
 from .predictors import Predictor, get_predictor
+from .utils.paths import get_cache_dir
 
-ARTIFACT_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
+ARTIFACT_DIR = get_cache_dir()
 _last_vertex_init: tuple[str, str] | None = None
+
+# Files larger than this transfer as concurrent chunks; a typical ONNX
+# artifact (~120 MB) is otherwise bottlenecked on a single stream.
+CHUNKED_TRANSFER_THRESHOLD_BYTES = 8 * 1024 * 1024
+TRANSFER_MAX_WORKERS = 8
 
 
 class VertexModel:
@@ -103,18 +111,56 @@ def vertex_init(project_name: str, region: str):
     _last_vertex_init = (project_name, region)
 
 
+def _download_blob(blob, download_path: str):
+    if blob.size and blob.size > CHUNKED_TRANSFER_THRESHOLD_BYTES:
+        transfer_manager.download_chunks_concurrently(
+            blob,
+            download_path,
+            worker_type=transfer_manager.THREAD,
+            max_workers=TRANSFER_MAX_WORKERS,
+        )
+    else:
+        blob.download_to_filename(download_path)
+
+
+def _upload_file(bucket, file_path: str, blob_name: str):
+    blob = bucket.blob(blob_name)
+    if os.path.getsize(file_path) > CHUNKED_TRANSFER_THRESHOLD_BYTES:
+        transfer_manager.upload_chunks_concurrently(
+            file_path,
+            blob,
+            worker_type=transfer_manager.THREAD,
+            max_workers=TRANSFER_MAX_WORKERS,
+        )
+    else:
+        blob.upload_from_filename(file_path)
+
+
 def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True):
     storage_client = storage.Client()
     bucket_name, artifact_path = artifact_uri.replace("gs://", "").split("/", 1)
     bucket = storage_client.bucket(bucket_name)
     os.makedirs(dir, exist_ok=True)
-    blobs = bucket.list_blobs(prefix=artifact_path)
-    for blob in blobs:
-        filename = blob.name.split("/")[-1]
-        download_path = os.path.join(dir, filename)
+    prefix = artifact_path.rstrip("/") + "/"
+    to_download = []
+    for blob in bucket.list_blobs(prefix=artifact_path):
+        if blob.name.startswith(prefix):
+            relative_path = blob.name[len(prefix) :]
+        else:
+            relative_path = blob.name.split("/")[-1]
+        if not relative_path:  # directory placeholder object
+            continue
+        download_path = os.path.join(dir, relative_path)
         if not force_download and os.path.exists(download_path):
             continue
-        blob.download_to_filename(download_path)
+        os.makedirs(os.path.dirname(download_path), exist_ok=True)
+        to_download.append((blob, download_path))
+    with ThreadPoolExecutor(max_workers=TRANSFER_MAX_WORKERS) as pool:
+        futures = [
+            pool.submit(_download_blob, blob, path) for blob, path in to_download
+        ]
+        for future in futures:
+            future.result()
 
 
 def upload_model(
@@ -255,10 +301,18 @@ def upload_model_with_files(
     bucket = client.bucket(bucket_name)
 
     artifact_dir = f"models/{model_name}/{version}/"
-    for file_name in file_list:
-        basename = os.path.basename(file_name)
-        blob = bucket.blob(f"{artifact_dir}{basename}")
-        blob.upload_from_filename(file_name)
+    with ThreadPoolExecutor(max_workers=TRANSFER_MAX_WORKERS) as pool:
+        futures = [
+            pool.submit(
+                _upload_file,
+                bucket,
+                file_name,
+                f"{artifact_dir}{os.path.basename(file_name)}",
+            )
+            for file_name in file_list
+        ]
+        for future in futures:
+            future.result()
 
     artifact_uri = f"gs://{bucket_name}/{artifact_dir}"
 

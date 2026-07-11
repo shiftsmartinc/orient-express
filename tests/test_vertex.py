@@ -194,8 +194,10 @@ class TestArtifactPathConstruction:
 
         mock_blob1 = MagicMock()
         mock_blob1.name = "models/test-model/2/metadata.yaml"
+        mock_blob1.size = 100
         mock_blob2 = MagicMock()
         mock_blob2.name = "models/test-model/2/model.onnx"
+        mock_blob2.size = 100
         mock_bucket.list_blobs.return_value = [mock_blob1, mock_blob2]
 
         with (
@@ -215,8 +217,10 @@ class TestArtifactPathConstruction:
 
         mock_blob1 = MagicMock()
         mock_blob1.name = "models/test-model/2/metadata.yaml"
+        mock_blob1.size = 100
         mock_blob2 = MagicMock()
         mock_blob2.name = "models/test-model/2/model.onnx"
+        mock_blob2.size = 100
         mock_bucket.list_blobs.return_value = [mock_blob1, mock_blob2]
 
         with (
@@ -232,6 +236,40 @@ class TestArtifactPathConstruction:
             mock_blob2.download_to_filename.assert_called_once_with(
                 os.path.join(tmpdir, "model.onnx")
             )
+
+    def test_download_artifacts_preserves_nested_subpaths(self, mock_storage_client):
+        """Blobs in subdirectories keep their relative paths (no basename collisions)."""
+        mock_client, mock_bucket = mock_storage_client
+
+        mock_blob1 = MagicMock()
+        mock_blob1.name = "models/test-model/2/metadata.yaml"
+        mock_blob1.size = 100
+        mock_blob2 = MagicMock()
+        mock_blob2.name = "models/test-model/2/weights/part-0.bin"
+        mock_blob2.size = 100
+        mock_dir_placeholder = MagicMock()
+        mock_dir_placeholder.name = "models/test-model/2/"
+        mock_dir_placeholder.size = 0
+        mock_bucket.list_blobs.return_value = [
+            mock_dir_placeholder,
+            mock_blob1,
+            mock_blob2,
+        ]
+
+        with (
+            patch("orient_express.vertex.storage.Client", return_value=mock_client),
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            download_artifacts(tmpdir, "gs://test-bucket/models/test-model/2/")
+
+            mock_blob1.download_to_filename.assert_called_once_with(
+                os.path.join(tmpdir, "metadata.yaml")
+            )
+            mock_blob2.download_to_filename.assert_called_once_with(
+                os.path.join(tmpdir, "weights", "part-0.bin")
+            )
+            assert os.path.isdir(os.path.join(tmpdir, "weights"))
+            mock_dir_placeholder.download_to_filename.assert_not_called()
 
 
 # -----------------------------------------------------------------------------
@@ -919,6 +957,7 @@ class TestGetLocalPredictor:
 
         mock_blob = MagicMock()
         mock_blob.name = "models/test/1/metadata.yaml"
+        mock_blob.size = 100
         mock_bucket.list_blobs.return_value = [mock_blob]
 
         mock_inner_model = MagicMock()
@@ -1102,7 +1141,10 @@ class TestUploadModelJoblib:
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
             patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
             patch("orient_express.vertex.aiplatform.init"),
-            patch("orient_express.vertex.joblib.dump") as mock_joblib_dump,
+            patch(
+                "orient_express.vertex.joblib.dump",
+                side_effect=lambda obj, path: open(path, "wb").write(b"stub"),
+            ) as mock_joblib_dump,
         ):
             mock_model_class.list.return_value = []
             mock_model_class.upload.return_value = MagicMock(name="new", version_id="1")
