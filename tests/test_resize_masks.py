@@ -50,3 +50,20 @@ def test_threaded_and_serial_paths_agree():
         [resize_masks(masks[i : i + 1], h, w)[0] for i in range(n)]
     )  # serial path (single mask is below the total-work threshold)
     np.testing.assert_array_equal(full, per_mask)
+
+
+def test_image_to_array_single_copy_path_matches_reference():
+    """image_to_array must stay bit-identical to np.array(img.convert('RGB'))."""
+    from PIL import Image
+
+    from orient_express.utils.image_processor import image_to_array
+
+    rng = np.random.default_rng(3)
+    rgb = Image.fromarray(rng.integers(0, 255, (60, 40, 3), dtype=np.uint8))
+    np.testing.assert_array_equal(image_to_array(rgb), np.array(rgb.convert("RGB")))
+
+    rgba = rgb.convert("RGBA")
+    np.testing.assert_array_equal(image_to_array(rgba), np.array(rgba.convert("RGB")))
+
+    gray = rgb.convert("L")
+    np.testing.assert_array_equal(image_to_array(gray), np.array(gray.convert("RGB")))

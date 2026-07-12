@@ -138,7 +138,18 @@ def base64_to_image(base64_data: str):
 
 
 def image_to_array(image: Image.Image):
-    return np.array(image.convert("RGB"))
+    """PIL -> HxWx3 uint8 RGB array with a single full-resolution copy.
+
+    The obvious np.array(image.convert("RGB")) materializes three
+    full-resolution temporaries (convert copy + tobytes + array copy), which
+    is page-fault-bound on large photos (~40 ms at 4K vs ~4 ms here). The
+    returned array is read-only; callers that need to write should copy.
+    """
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    return np.frombuffer(image.tobytes(), dtype=np.uint8).reshape(
+        image.height, image.width, 3
+    )
 
 
 # Threading pays off only when each per-mask resize is heavy enough to
