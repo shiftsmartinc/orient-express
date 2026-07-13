@@ -9,7 +9,7 @@ from google.cloud import storage, aiplatform
 from .predictors import get_predictor, Predictor
 
 ARTIFACT_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
-_vertex_initialized = False
+_last_vertex_init: tuple[str, str] | None = None
 
 
 class VertexModel:
@@ -89,10 +89,17 @@ class VertexModel:
 
 
 def vertex_init(project_name: str, region: str):
-    global _vertex_initialized
-    if not _vertex_initialized:
-        aiplatform.init(project=project_name, location=region)
-        _vertex_initialized = True
+    global _last_vertex_init
+    if _last_vertex_init is not None and _last_vertex_init != (project_name, region):
+        warnings.warn(
+            f"Vertex AI SDK re-initialized with project '{project_name}' region "
+            f"'{region}' (was project '{_last_vertex_init[0]}' region "
+            f"'{_last_vertex_init[1]}'). The SDK holds this state globally: models "
+            "and endpoints obtained before this call remain bound to the previous "
+            "project/region."
+        )
+    aiplatform.init(project=project_name, location=region)
+    _last_vertex_init = (project_name, region)
 
 
 def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True):
@@ -308,13 +315,12 @@ def get_vertex_model(
             latest_model, model_name, project_name, region, int(latest_model.version_id)
         )
 
-    if version is not None:
-        try:
-            model = aiplatform.Model(model_name=resource_name, version=str(version))
-        except Exception:
-            if raise_exception:
-                raise Exception(
-                    f"Failed to fetch model '{model_name}' with version '{version}' in registry for project '{project_name}' region '{region}'"
-                )
-            return None
-        return VertexModel(model, model_name, project_name, region, version)
+    try:
+        model = aiplatform.Model(model_name=resource_name, version=str(version))
+    except Exception:
+        if raise_exception:
+            raise Exception(
+                f"Failed to fetch model '{model_name}' with version '{version}' in registry for project '{project_name}' region '{region}'"
+            )
+        return None
+    return VertexModel(model, model_name, project_name, region, version)
