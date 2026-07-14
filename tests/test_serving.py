@@ -34,9 +34,7 @@ class TestBuildPredictKwargs:
         def predict(images, confidence):
             pass
 
-        assert build_predict_kwargs(predict, {"confidence": 0.9}) == {
-            "confidence": 0.9
-        }
+        assert build_predict_kwargs(predict, {"confidence": 0.9}) == {"confidence": 0.9}
 
     def test_optional_parameter_forwarded_when_present(self):
         def predict(images, confidence, nms_threshold=None):
@@ -72,9 +70,7 @@ class TestBuildPredictKwargs:
         def predict(images, confidence=0.5):
             pass
 
-        assert build_predict_kwargs(predict, {"confidence": 0.8}) == {
-            "confidence": 0.8
-        }
+        assert build_predict_kwargs(predict, {"confidence": 0.8}) == {"confidence": 0.8}
 
 
 class TestToResponse:

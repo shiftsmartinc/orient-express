@@ -75,8 +75,6 @@ def build_predict_kwargs(predict_fn, parameters: dict) -> dict:
             continue
         if name in parameters:
             kwargs[name] = parameters[name]
-        elif (
-            param.default is inspect.Parameter.empty and name in SERVER_PARAM_DEFAULTS
-        ):
+        elif param.default is inspect.Parameter.empty and name in SERVER_PARAM_DEFAULTS:
             kwargs[name] = SERVER_PARAM_DEFAULTS[name]
     return kwargs
