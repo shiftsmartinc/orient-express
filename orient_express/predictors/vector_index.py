@@ -112,8 +112,7 @@ class VectorIndex(Predictor):
         return self.vectors[idxs]
 
     def aggregate(self, per_label: bool = False) -> "VectorIndex":
-        """
-        Aggregate the vectors into a single centroid per unique label group.
+        """Aggregate the vectors into a single centroid per unique label group.
 
         Args:
             per_label: if True, create one centroid per individual label

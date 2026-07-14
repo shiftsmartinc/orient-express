@@ -286,9 +286,7 @@ class TestBoundingBoxPredictor:
 
 
 class TestNmsHelper:
-    """Pins the behavior of the cv2-backed nms() (verified against
-    torchvision.ops.nms during the torch removal: 300/300 random keep-set
-    matches; see that PR for the comparison harness)."""
+    """Pins the behavior of the cv2-backed nms() (verified against torchvision.ops.nms during the torch removal: 300/300 random keep-set matches; see that PR for the comparison harness)."""
 
     def test_orders_by_descending_score(self):
         from orient_express.predictors.object_detection import nms

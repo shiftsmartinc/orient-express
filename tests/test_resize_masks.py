@@ -1,6 +1,4 @@
-"""Pins resize_masks bilinear behavior (verified float32-equal to torch's
-F.interpolate(mode="bilinear", align_corners=False) during the torch
-removal; see that PR for the comparison harness)."""
+"""Pins resize_masks bilinear behavior (verified float32-equal to torch's F.interpolate(mode="bilinear", align_corners=False) during the torch removal; see that PR for the comparison harness)."""
 
 import numpy as np
 

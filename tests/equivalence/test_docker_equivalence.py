@@ -1,5 +1,4 @@
-"""Serving-level golden equivalence: boots the serving container per case and
-compares HTTP responses against docker goldens.
+"""Serving-level golden equivalence: boots the serving container per case and compares HTTP responses against docker goldens.
 
 Opt-in: requires ORIENT_EXPRESS_TEST_DOCKER_IMAGE (an image tag, usually built
 locally from the branch under test) in addition to the manifest env var.

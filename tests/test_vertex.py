@@ -1,5 +1,4 @@
-"""
-Tests for vertex.py functionality.
+"""Tests for vertex.py functionality.
 
 These tests verify:
 1. Artifact path construction for uploads and downloads

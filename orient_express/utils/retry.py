@@ -15,8 +15,8 @@ def retry(
     initial_timeout: float = 0.5,
     max_timeout: float = 30,
 ):
-    """
-    Retry decorated function
+    """Retry decorated function.
+
     :param retries: the number of retries
     :param initial_timeout: initial timeout before exponential backoff
     :param max_timeout: maximum timeout allowed
