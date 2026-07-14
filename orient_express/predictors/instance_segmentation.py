@@ -60,9 +60,7 @@ class OnnxInstanceSegmentation(OnnxSessionWrapper):
         }
 
         boxes, scores, labels, masks = self.session.run(None, input_dict)
-        return self.postprocess(
-            boxes, scores, labels, masks, target_sizes_array, confidence
-        )
+        return self.postprocess(boxes, scores, labels, masks, confidence)
 
     def postprocess(
         self,
@@ -70,7 +68,6 @@ class OnnxInstanceSegmentation(OnnxSessionWrapper):
         scores: np.ndarray,
         labels: np.ndarray,
         masks: np.ndarray,
-        target_sizes: np.ndarray,
         confidence: float,
     ):
         results: list[tuple[np.ndarray, np.ndarray]] = []
