@@ -1,6 +1,7 @@
 import os
 import warnings
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
 
@@ -17,6 +18,10 @@ from ..utils.paths import get_metadata_path
 IMAGE_ONNX_IMAGE_REPO = (
     "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx"
 )
+
+# Threshold for threading collate_images (total input pixels across the
+# batch); below it, per-task dispatch overhead outweighs the resize work.
+THREADED_COLLATE_MIN_TOTAL_PIXELS = 8_000_000
 
 
 def get_image_onnx_container_uri() -> str:
@@ -174,5 +179,21 @@ class OnnxSessionWrapper:
         return np.array(sizes, dtype=np.float32)
 
     def collate_images(self, pil_images: list[Image.Image]):
-        images = [cv2.resize(image_to_array(img), self.img_size) for img in pil_images]
-        return np.array(images)
+        n = len(pil_images)
+        batch = np.empty((n, self.resolution, self.resolution, 3), dtype=np.uint8)
+
+        def collate_one(i):
+            batch[i] = cv2.resize(image_to_array(pil_images[i]), self.img_size)
+
+        # cv2.resize releases the GIL, so batches of full-size photos collate
+        # ~3x faster on a thread pool; batches of small crops (e.g. from
+        # build_vector_index) stay serial — task dispatch would dominate their
+        # ~microsecond resizes. Calibrated empirically, see PR summary.
+        total_input_pixels = sum(img.size[0] * img.size[1] for img in pil_images)
+        if n >= 2 and total_input_pixels >= THREADED_COLLATE_MIN_TOTAL_PIXELS:
+            with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+                list(pool.map(collate_one, range(n)))
+        else:
+            for i in range(n):
+                collate_one(i)
+        return batch

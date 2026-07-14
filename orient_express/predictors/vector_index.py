@@ -80,6 +80,10 @@ class VectorIndex(Predictor):
         ]
 
     def search_batch(self, queries: np.ndarray, k: int = 1) -> list[list[SearchResult]]:
+        # Note: a fully vectorized top-k (argpartition axis=1 + take_along_axis)
+        # was benchmarked and is 15-35% SLOWER than this per-row loop at real
+        # sizes (e.g. 100k x 512 index, 1000 queries) — the loop keeps each
+        # similarity row hot in cache, and the matmul dominates regardless.
         similarities = queries @ self.vectors.T
         k = min(k, similarities.shape[1])
 

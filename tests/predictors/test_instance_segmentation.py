@@ -60,10 +60,10 @@ class TestInstanceSegmentationPredictor:
             assert target_sizes[1].tolist() == [200, 100]
             assert target_sizes[2].tolist() == [50, 50]
 
-    def test_postprocessing_mask_resizing(
+    def test_masks_stay_at_model_resolution_and_resize_lazily(
         self, mock_segmentation_session, class_mapping
     ):
-        """Masks are resized from model output size to original image size."""
+        """Predict keeps raw model-size masks; resizing happens on demand."""
         img = Image.fromarray(np.zeros((200, 300, 3), dtype=np.uint8), mode="RGB")
 
         mock_segmentation_session.run_outputs = [
@@ -80,7 +80,50 @@ class TestInstanceSegmentationPredictor:
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
             results = predictor.predict([img], confidence=0.5)
 
-            assert results[0][0].mask.shape == (200, 300)
+            pred = results[0][0]
+            # raw model output, unresized
+            assert pred.mask.shape == (28, 28)
+
+            # single-mask resize to fit the source image
+            resized = pred.resized_mask(img)
+            assert resized.shape == (200, 300)
+            assert resized.dtype == bool
+            assert resized.all()  # mask of 0.8s thresholds to all-True
+
+            # batch resize: all, then one
+            all_masks = predictor.resize_masks(img, results[0])
+            assert all_masks.shape == (1, 200, 300)
+            np.testing.assert_array_equal(all_masks[0], resized)
+            one_mask = predictor.resize_masks(img, results[0], index=0)
+            np.testing.assert_array_equal(one_mask, resized)
+
+    def test_resized_mask_matches_eager_resize_reference(
+        self, mock_segmentation_session, class_mapping
+    ):
+        """Lazy resize gives exactly what the old eager pipeline produced."""
+        from orient_express.utils.image_processor import resize_masks as resize_stack
+
+        rng = np.random.default_rng(0)
+        raw = rng.uniform(-1, 1, (1, 2, 28, 28)).astype(np.float32)
+        img = Image.fromarray(np.zeros((150, 250, 3), dtype=np.uint8), mode="RGB")
+
+        mock_segmentation_session.run_outputs = [
+            np.array([[[10, 10, 90, 90], [20, 20, 80, 80]]]),
+            np.array([[0.9, 0.8]]),
+            np.array([[1, 2]]),
+            raw,
+        ]
+
+        with patch(
+            "orient_express.predictors.predictor.ort.InferenceSession",
+            return_value=mock_segmentation_session,
+        ):
+            predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
+            results = predictor.predict([img], confidence=0.5)
+
+            reference = resize_stack(raw[0], 150, 250) > 0.0  # old pipeline
+            got = predictor.resize_masks(img, results[0])
+            np.testing.assert_array_equal(got, reference)
 
     def test_postprocessing_confidence_filtering(
         self, mock_segmentation_session, class_mapping

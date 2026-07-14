@@ -699,6 +699,44 @@ class TestEndpointManagement:
                 filter="display_name=my-endpoint", order_by="create_time"
             )
 
+    def test_get_endpoint_caches_resolved_endpoint(self):
+        """Repeated lookups (e.g. remote_predict in a loop) hit the API once."""
+        mock_endpoint = MagicMock()
+
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [mock_endpoint]
+
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="test-project",
+                region="us-central1",
+                version=1,
+            )
+
+            first = vertex_model.get_endpoint("my-endpoint")
+            second = vertex_model.get_endpoint("my-endpoint")
+
+            assert first is mock_endpoint and second is mock_endpoint
+            mock_endpoint_class.list.assert_called_once()
+
+    def test_failed_lookup_is_not_cached(self):
+        """A not-found endpoint is retried on the next lookup."""
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = []
+
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="test-project",
+                region="us-central1",
+                version=1,
+            )
+
+            assert vertex_model.get_endpoint("nope") is None
+            assert vertex_model.get_endpoint("nope") is None
+            assert mock_endpoint_class.list.call_count == 2
+
     def test_get_endpoint_returns_none_when_not_found(self):
         """get_endpoint returns None when no endpoints match."""
         with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
@@ -964,7 +1002,7 @@ class TestGetLocalPredictor:
 
         with (
             patch("orient_express.vertex.storage.Client", return_value=mock_client),
-            patch("orient_express.vertex.get_predictor") as mock_get_predictor,
+            patch("orient_express.predictors.get_predictor") as mock_get_predictor,
         ):
             mock_get_predictor.return_value = MagicMock()
 

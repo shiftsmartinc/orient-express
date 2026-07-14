@@ -1,16 +1,20 @@
+from __future__ import annotations
+
 import os
 import tempfile
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, TypeVar, overload
+from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 import joblib
 import yaml
 from google.cloud import aiplatform, storage
 from google.cloud.storage import transfer_manager
 
-from .predictors import Predictor, get_predictor
 from .utils.paths import get_cache_dir
+
+if TYPE_CHECKING:
+    from .predictors import Predictor
 
 T = TypeVar("T")
 
@@ -38,6 +42,7 @@ class VertexModel:
         self.project_name = project_name
         self.region = region
         self.version = version
+        self._endpoint_cache: dict[str, Any] = {}
 
     def deploy_to_endpoint(
         self,
@@ -63,18 +68,26 @@ class VertexModel:
             return self.create_endpoint(endpoint_name)
 
     def get_endpoint(self, endpoint_name: str):
+        # Endpoint.list is a full API round-trip; resolve each name once per
+        # VertexModel so repeated remote_predict calls don't pay it again.
+        cached = self._endpoint_cache.get(endpoint_name)
+        if cached is not None:
+            return cached
         endpoints = aiplatform.Endpoint.list(
             filter=f"display_name={endpoint_name}", order_by="create_time"
         )
         if endpoints:
+            self._endpoint_cache[endpoint_name] = endpoints[0]
             return endpoints[0]
 
     def create_endpoint(self, endpoint_name: str):
-        return aiplatform.Endpoint.create(
+        endpoint = aiplatform.Endpoint.create(
             display_name=endpoint_name,
             project=self.project_name,
             location=self.region,
         )
+        self._endpoint_cache[endpoint_name] = endpoint
+        return endpoint
 
     def remote_predict(
         self, endpoint_name: str, instances: list, parameters: dict | None = None
@@ -118,6 +131,9 @@ class VertexModel:
                 expected_type=BoundingBoxPredictor
             )
         """
+        # Deferred: pulls onnxruntime/cv2, which vertex-only users never need
+        from .predictors import get_predictor
+
         dir = os.path.join(ARTIFACT_DIR, self.model_name + "-" + str(self.version))
         self.download_artifacts(dir, force_download=force_download)
         if expected_type is None:

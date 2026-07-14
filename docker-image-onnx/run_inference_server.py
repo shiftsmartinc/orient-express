@@ -4,8 +4,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 from kserve import Model, ModelServer
+from PIL import Image as PILImage
 
-from orient_express.predictors import get_predictor
+from orient_express.predictors import ImagePredictor, get_predictor
 from orient_express.serving import build_predict_kwargs, decode_input, download_image
 from orient_express.utils.image_processor import fix_rotation
 from orient_express.vertex import ARTIFACT_DIR, download_artifacts
@@ -23,9 +24,23 @@ class OnnxImageModel(Model):
         download_dir = os.path.join(ARTIFACT_DIR, self.name)
         download_artifacts(download_dir, self.artifacts_path)
         self.model = get_predictor(download_dir)
+        self.warmup()
         self.ready = True
         logging.info(f"{self.name} loaded successfully")
         return self
+
+    def warmup(self):
+        # The first ONNX inference pays one-time allocation/setup costs; run
+        # it here so the first real request doesn't.
+        if not isinstance(self.model, ImagePredictor):
+            return
+        try:
+            dummy = PILImage.new("RGB", (64, 64))
+            kwargs = build_predict_kwargs(self.model.predict, {})
+            self.model.predict([dummy], **kwargs)
+            logging.info(f"[{self.name}] warmup inference complete")
+        except Exception:
+            logging.exception(f"[{self.name}] warmup inference failed (non-fatal)")
 
     def predict(self, inputs, *args, **kwargs):
         logging.info(f"[{self.name}] executing prediction")
