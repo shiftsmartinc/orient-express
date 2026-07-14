@@ -63,7 +63,7 @@ class TestInstanceSegmentationPredictor:
     def test_masks_stay_at_model_resolution_and_resize_lazily(
         self, mock_segmentation_session, class_mapping
     ):
-        """predict keeps raw model-size masks; resizing happens on demand."""
+        """Predict keeps raw model-size masks; resizing happens on demand."""
         img = Image.fromarray(np.zeros((200, 300, 3), dtype=np.uint8), mode="RGB")
 
         mock_segmentation_session.run_outputs = [

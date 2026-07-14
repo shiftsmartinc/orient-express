@@ -24,8 +24,7 @@ _http_session_lock = threading.Lock()
 
 
 def get_http_session() -> requests.Session:
-    """Shared session so per-image downloads reuse connections (keep-alive)
-    instead of paying DNS + TCP + TLS setup per request."""
+    """Shared session so per-image downloads reuse connections (keep-alive) instead of paying DNS + TCP + TLS setup per request."""
     global _http_session
     if _http_session is None:
         with _http_session_lock:
