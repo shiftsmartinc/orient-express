@@ -1,0 +1,38 @@
+# Example manifest (the real one lives in the private GCS prefix).
+#
+# Layout under gcs_prefix:
+#   manifest.yaml
+#   cases/<case>/model/   (metadata.yaml + model artifact — a pinned copy)
+#   cases/<case>/images/  (numbered photos: 00.jpg, 01.jpg, ...)
+#   goldens/<case>.json
+#   goldens/<case>.docker.json
+
+gcs_prefix: gs://example-bucket/example-prefix
+
+# Tolerances may be overridden per case.
+default_tolerances:
+  score_atol: 1.0e-3      # per-score absolute tolerance
+  bbox_atol: 0.5          # box coordinate tolerance, pixels
+  mask_iou_min: 0.999     # thresholded-mask IoU vs golden
+  pixel_mismatch_max: 1.0e-4  # semantic masks: fraction of differing pixels
+  cosine_min: 0.9999      # embeddings
+  class_scores_atol: 1.0e-3
+
+cases:
+  example-detection:
+    docker: true
+    variants:
+      - name: default
+        predict_params: {confidence: 0.5}
+      - name: nms
+        predict_params: {confidence: 0.5, nms_threshold: 0.5}
+  example-classification:
+    docker: true
+    variants:
+      - name: default
+        predict_params: {}
+  example-vector-index:
+    docker: false
+    # queries come from another case's embeddings (deterministic chain)
+    query_case: example-feature-extraction
+    top_k: 5
