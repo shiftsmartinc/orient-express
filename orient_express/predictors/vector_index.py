@@ -1,13 +1,14 @@
 import json
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import yaml
 from PIL import Image
-from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from ..utils.paths import get_metadata_path
@@ -111,8 +112,7 @@ class VectorIndex(Predictor):
         return self.vectors[idxs]
 
     def aggregate(self, per_label: bool = False) -> "VectorIndex":
-        """
-        Aggregate the vectors into a single centroid per unique label group.
+        """Aggregate the vectors into a single centroid per unique label group.
 
         Args:
             per_label: if True, create one centroid per individual label
@@ -205,29 +205,17 @@ class VectorIndex(Predictor):
         )
 
 
-class _CropDataset:
-    def __init__(self, crops: list[Image.Image | str | CropSpec]):
-        self.crops = crops
-
-    def __len__(self):
-        return len(self.crops)
-
-    def __getitem__(self, idx):
-        crop = self.crops[idx]
-        if isinstance(crop, CropSpec):
-            img = Image.open(crop.path).convert("RGB")
-            return img.crop(crop.bbox)
-        if isinstance(crop, str):
-            return Image.open(crop).convert("RGB")
-        if isinstance(crop, Image.Image):
-            return crop
-        raise TypeError(
-            f"Each crop must be a PIL Image, a file path string, or a CropSpec, got {type(crop)}"
-        )
-
-
-def _collate_pil(batch):
-    return list(batch)
+def _load_crop(crop: Image.Image | str | CropSpec) -> Image.Image:
+    if isinstance(crop, CropSpec):
+        img = Image.open(crop.path).convert("RGB")
+        return img.crop(crop.bbox)
+    if isinstance(crop, str):
+        return Image.open(crop).convert("RGB")
+    if isinstance(crop, Image.Image):
+        return crop
+    raise TypeError(
+        f"Each crop must be a PIL Image, a file path string, or a CropSpec, got {type(crop)}"
+    )
 
 
 def build_vector_index(
@@ -250,24 +238,30 @@ def build_vector_index(
             returns objects with a .feature attribute (e.g. FeatureExtractionPredictor).
         batch_size: number of crops to process at once.
         normalize: whether to L2-normalize the resulting feature vectors.
-        num_workers: number of DataLoader workers for parallel image loading.
+        num_workers: number of threads for parallel image loading
+            (0 loads images in the main thread).
     """
     if len(crops) != len(labels):
         raise ValueError(
             f"crops length ({len(crops)}) must match labels length ({len(labels)})"
         )
 
-    loader = DataLoader(
-        _CropDataset(crops),
-        batch_size=batch_size,
-        num_workers=num_workers,
-        collate_fn=_collate_pil,
-    )
+    batches = [crops[i : i + batch_size] for i in range(0, len(crops), batch_size)]
 
     all_features = []
-    for batch in tqdm(loader):
-        results = feature_extractor.predict(batch)
-        all_features.extend([r.feature for r in results])
+    with ExitStack() as stack:
+        pool = (
+            stack.enter_context(ThreadPoolExecutor(max_workers=num_workers))
+            if num_workers > 0
+            else None
+        )
+        for batch in tqdm(batches):
+            if pool is not None:
+                images = list(pool.map(_load_crop, batch))
+            else:
+                images = [_load_crop(crop) for crop in batch]
+            results = feature_extractor.predict(images)
+            all_features.extend([r.feature for r in results])
 
     vectors = np.vstack(all_features)
     return VectorIndex(vectors=vectors, labels=labels, normalize=normalize)

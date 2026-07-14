@@ -1,5 +1,4 @@
-"""Helpers shared by the kserve inference servers in docker-image-onnx/ and
-docker-xgboost-scikit-learn/.
+"""Helpers shared by the kserve inference servers in docker-image-onnx/ and docker-xgboost-scikit-learn/.
 
 kserve itself is deliberately not imported here — it is a `server`
 dependency-group package that only exists inside the Docker images.

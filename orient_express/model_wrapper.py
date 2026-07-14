@@ -15,9 +15,7 @@ class JoblibSimpleLoader(BaseLoader):
         self.model = model
 
     def dump(self) -> list[str]:
-        """
-        Save model locally, and return a list of local files
-        """
+        """Save model locally, and return a list of local files."""
         joblib.dump(self.model, self.serialized_model_path)
         return [self.serialized_model_path]
 
@@ -84,7 +82,8 @@ class ModelExpress:
 
     def get_latest_vertex_model(self, model_name: str):
         """If there are a few models with the same name, load the most recent one.
-        It's highly recommended to keep only 1 model with the same name to avoid the confusion
+
+        It's highly recommended to keep only 1 model with the same name to avoid the confusion.
         """
         self._vertex_init()
 

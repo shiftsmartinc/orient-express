@@ -1,7 +1,9 @@
 import base64
 import ipaddress
 import logging
+import os
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from urllib.parse import urlparse
 
@@ -136,6 +138,48 @@ def base64_to_image(base64_data: str):
 
 def image_to_array(image: Image.Image):
     return np.array(image.convert("RGB"))
+
+
+# Threading pays off only when each per-mask resize is heavy enough to
+# amortize task dispatch AND the whole job is heavy enough to amortize pool
+# setup; small outputs are always faster serial, even for hundreds of masks
+# (calibrated empirically — see the resize experiments in the torch-removal
+# PR summary).
+THREADED_RESIZE_MIN_PIXELS_PER_MASK = 100_000
+THREADED_RESIZE_MIN_TOTAL_PIXELS = 8_000_000
+
+
+def resize_masks(masks: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Bilinearly resize a stack of (N, h, w) float masks to (N, height, width).
+
+    Matches torch's F.interpolate(mode="bilinear", align_corners=False) /
+    OpenCV's half-pixel-center convention (verified equal to within float32
+    precision). cv2.resize releases the GIL, so heavy jobs resize on a
+    thread pool; output is identical either way.
+    """
+    n = masks.shape[0]
+    resized = np.empty((n, height, width), dtype=np.float32)
+
+    def resize_one(i):
+        resized[i] = cv2.resize(
+            masks[i].astype(np.float32),
+            (width, height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+    pixels_per_mask = height * width
+    use_threads = (
+        pixels_per_mask >= THREADED_RESIZE_MIN_PIXELS_PER_MASK
+        and n * pixels_per_mask >= THREADED_RESIZE_MIN_TOTAL_PIXELS
+    )
+    if use_threads:
+        workers = min(8, os.cpu_count() or 1)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(resize_one, range(n)))
+    else:
+        for i in range(n):
+            resize_one(i)
+    return resized
 
 
 def pil_to_opencv(image: Image.Image):

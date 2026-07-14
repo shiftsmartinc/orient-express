@@ -3,11 +3,9 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-import torch
-import torch.nn.functional as F
 from PIL import Image
 
-from ..utils.image_processor import opencv_to_pil, pil_to_opencv
+from ..utils.image_processor import opencv_to_pil, pil_to_opencv, resize_masks
 from .predictor import ImagePredictor, OnnxSessionWrapper
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -77,14 +75,7 @@ class OnnxInstanceSegmentation(OnnxSessionWrapper):
             h, w = int(target_sizes[i][0]), int(target_sizes[i][1])
 
             if len(filtered_masks) > 0:
-                filtered_masks_torch = torch.from_numpy(filtered_masks).unsqueeze(1)
-                resized_masks_torch = F.interpolate(
-                    filtered_masks_torch,
-                    size=(h, w),
-                    mode="bilinear",
-                    align_corners=False,
-                )
-                resized_masks = resized_masks_torch.squeeze(1).numpy() > 0.0
+                resized_masks = resize_masks(filtered_masks, h, w) > 0.0
             else:
                 resized_masks = np.empty((0, h, w), dtype=bool)
 

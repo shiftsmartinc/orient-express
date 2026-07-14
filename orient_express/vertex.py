@@ -208,8 +208,7 @@ def upload_model(
     serving_container_predict_route: str = "",
     labels: dict[str, str] | None = None,
 ):
-    """
-    Upload a Predictor model to Vertex AI Model Registry.
+    """Upload a Predictor model to Vertex AI Model Registry.
 
     Args:
         model: Any joblib-serializable model
@@ -262,8 +261,7 @@ def upload_model_joblib(
     serving_container_predict_route: str,
     labels: dict[str, str] | None = None,
 ):
-    """
-    Upload a joblib-serializable model to Vertex AI Model Registry.
+    """Upload a joblib-serializable model to Vertex AI Model Registry.
 
     Unlike upload_model which works with Predictor instances, this function
     accepts any model that can be serialized with joblib (e.g., scikit-learn

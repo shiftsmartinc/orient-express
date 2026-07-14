@@ -227,8 +227,7 @@ class TestVectorIndex:
     def test_aggregate_tuple_label_centroid_correctness(
         self, multi_label_index, normalized_vectors
     ):
-        """Tuple label ("A", "C") appears only on vector 2.
-        Its centroid should equal that vector (already normalized)."""
+        """Tuple label ("A", "C") appears only on vector 2. Its centroid should equal that vector (already normalized)."""
         agg = multi_label_index.aggregate()
         centroid = _get_centroid_for(agg, ("A", "C"))
         np.testing.assert_allclose(centroid, normalized_vectors[2], atol=1e-5)
@@ -236,8 +235,7 @@ class TestVectorIndex:
     def test_aggregate_shared_label_centroid(
         self, multi_label_index, normalized_vectors
     ):
-        """Tuple label ("A",) appears on vectors 0 and 1.
-        Its centroid should be their normalized mean."""
+        """Tuple label ("A",) appears on vectors 0 and 1. Its centroid should be their normalized mean."""
         agg = multi_label_index.aggregate()
         centroid = _get_centroid_for(agg, ("A",))
         expected = normalized_vectors[0] + normalized_vectors[1]
@@ -253,8 +251,7 @@ class TestVectorIndex:
     def test_aggregate_tuple_per_label_centroid_correctness(
         self, multi_label_index, normalized_vectors
     ):
-        """per_label=True: label "C" appears in tuples on vectors 2 and 3.
-        Its centroid should be the normalized mean of those two vectors."""
+        """per_label=True: label "C" appears in tuples on vectors 2 and 3. Its centroid should be the normalized mean of those two vectors."""
         agg = multi_label_index.aggregate(per_label=True)
         centroid = _get_centroid_for(agg, "C")
         expected = normalized_vectors[2] + normalized_vectors[3]
@@ -300,8 +297,7 @@ class TestVectorIndex:
         np.testing.assert_allclose(loaded.vectors, int_label_index.vectors)
 
     def test_dump_and_load_roundtrip_tuple_labels(self, multi_label_index, tmp_path):
-        """Tuple labels survive dump/load (JSON serializes tuples as arrays,
-        load_vector_index must convert them back)."""
+        """Tuple labels survive dump/load (JSON serializes tuples as arrays, load_vector_index must convert them back)."""
         multi_label_index.dump(str(tmp_path))
         loaded = load_vector_index(str(tmp_path))
         assert loaded.labels == multi_label_index.labels
@@ -450,10 +446,9 @@ class TestBuildVectorIndex:
         p = tmp_path / "image.png"
         img.save(str(p))
 
-        from orient_express.predictors.vector_index import _CropDataset
+        from orient_express.predictors.vector_index import _load_crop
 
-        dataset = _CropDataset([CropSpec(path=str(p), bbox=(30, 20, 60, 40))])
-        crop = dataset[0]
+        crop = _load_crop(CropSpec(path=str(p), bbox=(30, 20, 60, 40)))
         crop_arr = np.array(crop)
         assert crop.size == (30, 20)
         assert np.all(crop_arr[:, :, 0] == 255)

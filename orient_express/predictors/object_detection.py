@@ -2,12 +2,26 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-import torch
 from PIL import Image
-from torchvision.ops import nms
 
 from ..utils.image_processor import opencv_to_pil, pil_to_opencv
 from .predictor import ImagePredictor, OnnxSessionWrapper
+
+
+def nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np.ndarray:
+    """Greedy non-maximum suppression via cv2.dnn.NMSBoxes.
+
+    Keeps boxes whose IoU with a higher-scoring kept box is <= iou_threshold
+    (verified output-identical to torchvision.ops.nms). boxes are (N, 4) as
+    x1, y1, x2, y2; returns kept indices ordered by descending score.
+    """
+    boxes_xywh = boxes.astype(np.float32, copy=True)
+    boxes_xywh[:, 2] -= boxes_xywh[:, 0]
+    boxes_xywh[:, 3] -= boxes_xywh[:, 1]
+    keep = cv2.dnn.NMSBoxes(
+        boxes_xywh, scores.astype(np.float32), 0.0, float(iou_threshold)
+    )
+    return np.asarray(keep, dtype=np.int64).reshape(-1)
 
 
 @dataclass
@@ -98,11 +112,8 @@ class BoundingBoxPredictor(ImagePredictor):
     def apply_nms(self, boxes: np.ndarray, iou_threshold: float):
         if not len(boxes):
             return boxes
-        boxes_tensor = torch.from_numpy(boxes)
-        indices = (
-            nms(boxes_tensor[:, :4], boxes_tensor[:, 4], iou_threshold).cpu().numpy()
-        )
-        return boxes_tensor[indices].numpy()
+        indices = nms(boxes[:, :4], boxes[:, 4], iou_threshold)
+        return boxes[indices]
 
     def format_output(self, boxes: np.ndarray):
         outputs: list[BoundingBoxPrediction] = []

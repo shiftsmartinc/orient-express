@@ -11,9 +11,7 @@ def get_default_retry_policy():
 
 
 def parse_gcs_url(gs_url):
-    """
-    Parse URL of a file, located in Google Cloud Storage bucket.
-    """
+    """Parse URL of a file, located in Google Cloud Storage bucket."""
     parsed = urlparse(gs_url)
     if not parsed.scheme == "gs" or not parsed.netloc:
         raise ValueError(f"Invalid GCS URL format for {gs_url}")
@@ -23,8 +21,7 @@ def parse_gcs_url(gs_url):
 
 
 def get_gcs_from_http_url(http_url):
-    """
-    If HTTP URL belongs to Google Storage Bucket, extract GCS URI, otherwise return None
+    """If HTTP URL belongs to Google Storage Bucket, extract GCS URI, otherwise return None.
 
     :param http_url:
     :return: gcs_uri
@@ -36,9 +33,7 @@ def get_gcs_from_http_url(http_url):
 
 
 def exists(gs_url):
-    """
-    Check whether a GCS URL exists
-    """
+    """Check whether a GCS URL exists."""
     bucket_name, path = parse_gcs_url(gs_url)
 
     storage_client = storage.Client()
@@ -50,12 +45,12 @@ def exists(gs_url):
 def upload_file(
     file_path, gs_url, read_mode="rb", content_type="application/octet-stream"
 ):
-    """
-    Upload file to Google Cloud Storage
+    """Upload file to Google Cloud Storage.
 
     Args:
         file_path (str): Path to the local file to upload
         gs_url (str): Google Cloud Storage URL where the file should be uploaded
+        read_mode (str): Mode used to open the local file for reading
         content_type (str): MIME type of the file being uploaded
     """
     bucket_name, gs_file_path = parse_gcs_url(gs_url)
@@ -73,8 +68,7 @@ def upload_file(
 
 
 def download_file(gs_url, file_path):
-    """
-    Download file from Google Cloud Storage to local filesystem.
+    """Download file from Google Cloud Storage to local filesystem.
 
     Args:
         gs_url (str): Google Cloud Storage URL (e.g., 'gs://bucket-name/path/to/file.txt')
@@ -106,9 +100,7 @@ def download_file(gs_url, file_path):
 
 
 def read_file_bytes(gs_url):
-    """
-    Read file, located in Google Storage bucket, as bytes
-    """
+    """Read file, located in Google Storage bucket, as bytes."""
     bucket_name, path = parse_gcs_url(gs_url)
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)

@@ -8,9 +8,7 @@ def generate_color_scheme(
     lightness: float = 0.5,
     transparency: float = 0.6,
 ) -> dict[Any, tuple[int, int, int, int]]:
-    """
-    Assign unique colors to strings with max distance between them.
-    """
+    """Assign unique colors to strings with max distance between them."""
     n = len(strings)
     colors = {}
 

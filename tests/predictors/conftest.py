@@ -9,9 +9,7 @@ from PIL import Image
 
 @pytest.fixture
 def mock_onnx_session():
-    """
-    Creates a mock ONNX session factory that captures inputs and returns
-    configured outputs.
+    """Creates a mock ONNX session factory that captures inputs and returns configured outputs.
 
     Usage: After creating the mock, set mock_session.run_outputs to the list
     that session.run() should return. The inputs will be captured in
@@ -54,8 +52,8 @@ def mock_onnx_session():
 
 @pytest.fixture
 def checkerboard_image():
-    """
-    Creates a 100x100 checkerboard image with 50x50 quadrants.
+    """Creates a 100x100 checkerboard image with 50x50 quadrants.
+
     Top-left: white (255, 255, 255)
     Top-right: black (0, 0, 0)
     Bottom-left: black (0, 0, 0)

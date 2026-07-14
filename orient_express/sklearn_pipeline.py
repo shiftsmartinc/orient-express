@@ -3,9 +3,7 @@ from sklearn.preprocessing import LabelEncoder
 
 
 class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
-    """
-    A wrapper class that integrates a model and a label encoder to handle
-    encoded predictions and their corresponding probabilities.
+    """A wrapper class that integrates a model and a label encoder to handle encoded predictions and their corresponding probabilities.
 
     Attributes:
         model (object): A machine learning model with `fit`, `predict`, and `predict_proba` methods.
@@ -21,8 +19,7 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
     """
 
     def __init__(self, model: BaseEstimator, label_encoder: LabelEncoder):
-        """
-        Initializes the LabelEncoderTransformer.
+        """Initializes the LabelEncoderTransformer.
 
         Args:
             model (BaseEstimator): A machine learning model.
@@ -32,8 +29,7 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
         self.label_encoder = label_encoder
 
     def fit(self, X, y):
-        """
-        Fits the model to the training data.
+        """Fits the model to the training data.
 
         Args:
             X (array-like): Feature matrix.
@@ -46,8 +42,7 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
         return self
 
     def predict(self, X):
-        """
-        Predicts the target labels and returns the original string labels.
+        """Predicts the target labels and returns the original string labels.
 
         Args:
             X (array-like): Feature matrix for predictions.
@@ -59,8 +54,7 @@ class LabelEncoderTransformer(BaseEstimator, TransformerMixin):
         return self.label_encoder.inverse_transform(encoded_predictions)
 
     def predict_proba(self, X):
-        """
-        Returns class probabilities along with their original labels.
+        """Returns class probabilities along with their original labels.
 
         Args:
             X (array-like): Feature matrix for predictions.
