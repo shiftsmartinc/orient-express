@@ -62,6 +62,7 @@ select = [
     "I",              # isort
     "B",              # bugbear (mutable defaults, footguns)
     "UP",             # pyupgrade
+    "D",              # pydocstyle
 ]
 
 [tool.ruff.lint.per-file-ignores]
