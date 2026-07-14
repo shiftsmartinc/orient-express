@@ -147,6 +147,19 @@ class VectorIndex(Predictor):
 
         return VectorIndex(vectors=centroids, labels=new_labels)
 
+    @classmethod
+    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu") -> "VectorIndex":
+        artifact_path = os.path.join(dir, metadata["model_file"])
+        data = np.load(artifact_path, allow_pickle=False)
+        vectors = data["vectors"]
+        labels = json.loads(str(data["labels_json"]))
+        labels = [
+            tuple(label) if isinstance(label, list) else label for label in labels
+        ]
+        index = cls(vectors=vectors, labels=labels)
+        index.model_path = artifact_path
+        return index
+
     def get_serving_container_image_uri(self) -> str:
         warnings.warn(
             "VectorIndex does not support serving via a container. Returning incompatible image URI.",

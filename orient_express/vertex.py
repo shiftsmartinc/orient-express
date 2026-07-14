@@ -2,6 +2,7 @@ import os
 import tempfile
 import warnings
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, TypeVar, overload
 
 import joblib
 import yaml
@@ -10,6 +11,8 @@ from google.cloud.storage import transfer_manager
 
 from .predictors import Predictor, get_predictor
 from .utils.paths import get_cache_dir
+
+T = TypeVar("T")
 
 ARTIFACT_DIR = get_cache_dir()
 _last_vertex_init: tuple[str, str] | None = None
@@ -85,10 +88,41 @@ class VertexModel:
         predictions = self.endpoint.predict(instances=instances, parameters=parameters)
         return predictions.predictions
 
-    def get_local_predictor(self, device: str = "cpu", force_download: bool = False):
+    @overload
+    def get_local_predictor(
+        self, device: str = "cpu", force_download: bool = False
+    ) -> Any: ...
+
+    @overload
+    def get_local_predictor(
+        self,
+        device: str = "cpu",
+        force_download: bool = False,
+        *,
+        expected_type: type[T],
+    ) -> T: ...
+
+    def get_local_predictor(
+        self,
+        device: str = "cpu",
+        force_download: bool = False,
+        *,
+        expected_type: type[T] | None = None,
+    ) -> Any:
+        """Download this model's artifacts (cached) and load a local predictor.
+
+        Pass expected_type to narrow the static return type and get a runtime
+        check that the artifact really is that predictor class:
+
+            predictor = vertex_model.get_local_predictor(
+                expected_type=BoundingBoxPredictor
+            )
+        """
         dir = os.path.join(ARTIFACT_DIR, self.model_name + "-" + str(self.version))
         self.download_artifacts(dir, force_download=force_download)
-        return get_predictor(dir, device)
+        if expected_type is None:
+            return get_predictor(dir, device)
+        return get_predictor(dir, device, expected_type=expected_type)
 
     def download_artifacts(self, dir: str, force_download: bool = True):
         download_artifacts(

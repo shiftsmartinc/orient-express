@@ -1,9 +1,9 @@
 import json
 import logging
 import os
+from typing import Any, TypeVar, overload
 
 import joblib
-import numpy as np
 import yaml
 
 from ..utils.paths import get_metadata_path
@@ -18,26 +18,41 @@ from .multi_label_classification import (
     MultiLabelClassificationPredictor,
 )
 from .object_detection import BoundingBoxPrediction, BoundingBoxPredictor
-from .predictor import ImagePredictor, Predictor
+from .predictor import PREDICTOR_REGISTRY, ImagePredictor, Predictor
 from .semantic_segmentation import (
     SemanticSegmentationPrediction,
     SemanticSegmentationPredictor,
 )
 from .vector_index import CropSpec, SearchResult, VectorIndex, build_vector_index
 
+T = TypeVar("T")
 
-def get_predictor(dir: str, device: str = "cpu"):
-    downloaded_files = os.listdir(dir)
+
+@overload
+def get_predictor(dir: str, device: str = "cpu") -> Any: ...
+
+
+@overload
+def get_predictor(dir: str, device: str = "cpu", *, expected_type: type[T]) -> T: ...
+
+
+def get_predictor(
+    dir: str, device: str = "cpu", *, expected_type: type[T] | None = None
+) -> Any:
+    """Load whatever model artifact lives in `dir`.
+
+    The concrete class is chosen at runtime by the model_type recorded in
+    metadata.yaml, so the static return type is unknown. Pass expected_type
+    to narrow the type for the checker and assert it at runtime:
+
+        predictor = get_predictor(dir, expected_type=BoundingBoxPredictor)
+    """
     metadata_path = get_metadata_path(dir)
     if not os.path.exists(metadata_path):
         logging.warning(
             f"No metadata.yaml file found in {dir}. Will try to load model from joblib file."
         )
-        for file in downloaded_files:
-            if file.endswith(".joblib"):
-                file_path = os.path.join(dir, file)
-                return joblib.load(file_path)
-        raise Exception(f"No joblib file found in {dir}")
+        predictor = _load_joblib_fallback(dir)
     else:
         with open(metadata_path) as f:
             metadata = yaml.safe_load(f)
@@ -47,58 +62,30 @@ def get_predictor(dir: str, device: str = "cpu"):
         if "model_file" not in metadata:
             raise Exception("No model_file defined in metadata.yaml")
         if model_type == "joblib":
-            joblib_path = os.path.join(dir, metadata["model_file"])
-            return joblib.load(joblib_path)
-        elif model_type == InstanceSegmentationPredictor.model_type:
-            return load_image_predictor(
-                InstanceSegmentationPredictor, dir, metadata, device
-            )
-        elif model_type == BoundingBoxPredictor.model_type:
-            return load_image_predictor(BoundingBoxPredictor, dir, metadata, device)
-        elif model_type == SemanticSegmentationPredictor.model_type:
-            return load_image_predictor(
-                SemanticSegmentationPredictor, dir, metadata, device
-            )
-        elif model_type == ClassificationPredictor.model_type:
-            return load_image_predictor(ClassificationPredictor, dir, metadata, device)
-        elif model_type == MultiLabelClassificationPredictor.model_type:
-            return load_image_predictor(
-                MultiLabelClassificationPredictor, dir, metadata, device
-            )
-        elif model_type == FeatureExtractionPredictor.model_type:
-            return load_feature_extractor(dir, metadata, device)
-        elif model_type == VectorIndex.model_type:
-            return load_vector_index(dir, metadata)
+            predictor = joblib.load(os.path.join(dir, metadata["model_file"]))
         else:
-            raise Exception(f"Unknown model_type '{model_type}'")
+            predictor_class = PREDICTOR_REGISTRY.get(model_type)
+            if predictor_class is None:
+                raise Exception(f"Unknown model_type '{model_type}'")
+            predictor = predictor_class.from_dir(dir, metadata, device)
+    if expected_type is not None and not isinstance(predictor, expected_type):
+        raise TypeError(
+            f"Expected {expected_type.__name__} but artifact in {dir} loaded as "
+            f"{type(predictor).__name__}"
+        )
+    return predictor
 
 
-def load_image_predictor(
-    model_type: type[ImagePredictor], dir: str, metadata: dict, device: str = "cpu"
-):
-    onnx_path = os.path.join(dir, metadata["model_file"])
-    if "classes" not in metadata:
-        raise Exception("No classes defined in metadata.yaml")
-    classes = metadata["classes"]
-    return model_type(onnx_path, classes, device)
+def _load_joblib_fallback(dir: str):
+    for file in os.listdir(dir):
+        if file.endswith(".joblib"):
+            return joblib.load(os.path.join(dir, file))
+    raise Exception(f"No joblib file found in {dir}")
 
 
-def load_feature_extractor(dir: str, metadata: dict, device: str = "cpu"):
-    onnx_path = os.path.join(dir, metadata["model_file"])
-    return FeatureExtractionPredictor(onnx_path, device)
-
-
-def load_vector_index(dir: str, metadata: dict | None = None):
+def load_vector_index(dir: str, metadata: dict | None = None) -> VectorIndex:
     if metadata is None:
-        metadata_path = get_metadata_path(dir)
-        with open(metadata_path) as f:
+        with open(get_metadata_path(dir)) as f:
             metadata = yaml.safe_load(f)
     assert metadata is not None
-    artifact_path = os.path.join(dir, metadata["model_file"])
-    data = np.load(artifact_path, allow_pickle=False)
-    vectors = data["vectors"]
-    labels = json.loads(str(data["labels_json"]))
-    labels = [tuple(label) if isinstance(label, list) else label for label in labels]
-    index = VectorIndex(vectors=vectors, labels=labels)
-    index.model_path = artifact_path
-    return index
+    return VectorIndex.from_dir(dir, metadata)
