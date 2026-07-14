@@ -1,8 +1,9 @@
-import pytest
 import numpy as np
-from sklearn.preprocessing import LabelEncoder
-from sklearn.ensemble import RandomForestClassifier
+import pytest
 from sklearn.datasets import make_classification
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder
+
 from orient_express.sklearn_pipeline import (
     LabelEncoderTransformer,
 )  # Replace with your actual module name

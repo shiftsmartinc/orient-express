@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-from .predictor import OnnxSessionWrapper, ImagePredictor
+from .predictor import ImagePredictor, OnnxSessionWrapper
 
 
 @dataclass

@@ -1,5 +1,5 @@
-from typing import Any
 import colorsys
+from typing import Any
 
 
 def generate_color_scheme(

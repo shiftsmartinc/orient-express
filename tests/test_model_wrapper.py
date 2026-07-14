@@ -1,9 +1,10 @@
-import pytest
-import pandas as pd
-import joblib
 import os
-from unittest.mock import patch, MagicMock
-from orient_express import ModelExpress, JoblibSimpleLoader
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
+import pytest
+
+from orient_express import JoblibSimpleLoader, ModelExpress
 
 
 @pytest.fixture
@@ -30,11 +31,13 @@ def input_data():
 
 
 def test_get_latest_vertex_model(model_express_instance):
-    with patch.object(model_express_instance, "_vertex_init"), patch(
-        "google.cloud.aiplatform.Model.list",
-        return_value=[MagicMock(update_time="2024-11-01T00:00:00Z")],
-    ) as mock_list:
-
+    with (
+        patch.object(model_express_instance, "_vertex_init"),
+        patch(
+            "google.cloud.aiplatform.Model.list",
+            return_value=[MagicMock(update_time="2024-11-01T00:00:00Z")],
+        ) as mock_list,
+    ):
         latest_model = model_express_instance.get_latest_vertex_model("test_model")
 
         assert latest_model is not None

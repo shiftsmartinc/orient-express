@@ -10,24 +10,23 @@ These tests verify:
 All GCS and Vertex AI SDK calls are mocked.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
-from datetime import datetime
-import tempfile
 import os
+import tempfile
+from datetime import datetime
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Import the module for accessing globals like _last_vertex_init
 import orient_express.vertex as vertex_module
-
 from orient_express.vertex import (
-    upload_model,
-    upload_model_joblib,
+    VertexModel,
     download_artifacts,
     get_vertex_model,
+    upload_model,
+    upload_model_joblib,
     vertex_init,
-    VertexModel,
 )
-
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -939,7 +938,7 @@ class TestGetLocalPredictor:
                 version=1,
             )
 
-            result = vertex_model.get_local_predictor()
+            vertex_model.get_local_predictor()
 
             # Verify get_predictor was called
             mock_get_predictor.assert_called_once()

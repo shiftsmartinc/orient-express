@@ -1,30 +1,29 @@
-import os
-import logging
 import json
+import logging
+import os
 
 import joblib
-import yaml
 import numpy as np
+import yaml
 
 from ..utils.paths import get_metadata_path
-
-from .predictor import Predictor, ImagePredictor
-from .instance_segmentation import (
-    InstanceSegmentationPredictor,
-    InstanceSegmentationPrediction,
-)
-from .object_detection import BoundingBoxPredictor, BoundingBoxPrediction
-from .semantic_segmentation import (
-    SemanticSegmentationPredictor,
-    SemanticSegmentationPrediction,
-)
-from .classification import ClassificationPredictor, ClassificationPrediction
-from .multi_label_classification import (
-    MultiLabelClassificationPredictor,
-    MultiLabelClassificationPrediction,
-)
+from .classification import ClassificationPrediction, ClassificationPredictor
 from .feature_extraction import FeatureExtractionPredictor, FeaturePrediction
-from .vector_index import VectorIndex, SearchResult, CropSpec, build_vector_index
+from .instance_segmentation import (
+    InstanceSegmentationPrediction,
+    InstanceSegmentationPredictor,
+)
+from .multi_label_classification import (
+    MultiLabelClassificationPrediction,
+    MultiLabelClassificationPredictor,
+)
+from .object_detection import BoundingBoxPrediction, BoundingBoxPredictor
+from .predictor import ImagePredictor, Predictor
+from .semantic_segmentation import (
+    SemanticSegmentationPrediction,
+    SemanticSegmentationPredictor,
+)
+from .vector_index import CropSpec, SearchResult, VectorIndex, build_vector_index
 
 
 def get_predictor(dir: str, device: str = "cpu"):

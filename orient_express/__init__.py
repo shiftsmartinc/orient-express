@@ -1,1 +1,1 @@
-from .model_wrapper import ModelExpress, JoblibSimpleLoader
+from .model_wrapper import JoblibSimpleLoader, ModelExpress

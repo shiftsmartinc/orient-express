@@ -1,14 +1,14 @@
-from dataclasses import dataclass
 from collections import defaultdict
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from PIL import Image
 import torch
 import torch.nn.functional as F
+from PIL import Image
 
-from .predictor import OnnxSessionWrapper, ImagePredictor
-from ..utils.image_processor import pil_to_opencv, opencv_to_pil
+from ..utils.image_processor import opencv_to_pil, pil_to_opencv
+from .predictor import ImagePredictor, OnnxSessionWrapper
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -118,7 +118,7 @@ class InstanceSegmentationPredictor(ImagePredictor):
 
     def format_output(self, boxes: np.ndarray, masks: np.ndarray):
         outputs: list[InstanceSegmentationPrediction] = []
-        for box, mask in zip(boxes, masks):
+        for box, mask in zip(boxes, masks, strict=True):
             outputs.append(
                 InstanceSegmentationPrediction(
                     clss=self.classes.get(int(box[5]), "Unknown"),

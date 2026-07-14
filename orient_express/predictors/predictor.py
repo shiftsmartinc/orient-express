@@ -1,16 +1,35 @@
 import os
-from abc import ABC, abstractmethod
 import warnings
+from abc import ABC, abstractmethod
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _package_version
 
-import yaml
-import onnxruntime as ort
-from PIL import Image
 import cv2
 import numpy as np
+import onnxruntime as ort
+import yaml
+from PIL import Image
 
-from ..utils.paths import get_metadata_path
 from ..utils.colors import generate_color_scheme
 from ..utils.image_processor import image_to_array
+from ..utils.paths import get_metadata_path
+
+IMAGE_ONNX_IMAGE_REPO = (
+    "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx"
+)
+
+
+def get_image_onnx_container_uri() -> str:
+    """Serving-image URI whose tag tracks the installed library version.
+
+    The Makefile builds/pushes the image with the same version tag, so the
+    library and its serving image can't drift apart.
+    """
+    try:
+        tag = f"v{_package_version('orient_express')}"
+    except PackageNotFoundError:  # running from a source tree without install
+        tag = "latest"
+    return f"{IMAGE_ONNX_IMAGE_REPO}:{tag}"
 
 
 class Predictor(ABC):
@@ -46,7 +65,7 @@ class ImagePredictor(Predictor):
         self.model_path = model_path
 
     def get_serving_container_image_uri(self):
-        return "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:v2.4.2"
+        return get_image_onnx_container_uri()
 
     def get_serving_container_health_route(self, model_name):
         return f"/v1/models/{model_name}"
@@ -83,7 +102,8 @@ class OnnxSessionWrapper:
             providers = ["CUDAExecutionProvider"]
         else:
             warnings.warn(
-                f"Unknown device '{device}'. Defaulting to CPU. Supported devices: 'cpu', 'cuda'."
+                f"Unknown device '{device}'. Defaulting to CPU. Supported devices: 'cpu', 'cuda'.",
+                stacklevel=2,
             )
             providers = ["CPUExecutionProvider"]
 

@@ -1,12 +1,12 @@
 import os
 from dataclasses import dataclass
 
-import yaml
 import numpy as np
+import yaml
 from PIL import Image
 
-from .predictor import OnnxSessionWrapper, ImagePredictor
 from ..utils.paths import get_metadata_path
+from .predictor import ImagePredictor, OnnxSessionWrapper
 
 
 @dataclass

@@ -1,17 +1,17 @@
-import os
 import json
-from dataclasses import dataclass
+import os
 import warnings
+from dataclasses import dataclass
 from typing import Any
 
-import yaml
 import numpy as np
+import yaml
 from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .predictor import Predictor
 from ..utils.paths import get_metadata_path
+from .predictor import Predictor, get_image_onnx_container_uri
 
 
 @dataclass
@@ -149,9 +149,10 @@ class VectorIndex(Predictor):
 
     def get_serving_container_image_uri(self) -> str:
         warnings.warn(
-            "VectorIndex does not support serving via a container. Returning incompatible image URI."
+            "VectorIndex does not support serving via a container. Returning incompatible image URI.",
+            stacklevel=2,
         )
-        return "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx:v2.1.2"
+        return get_image_onnx_container_uri()
 
     def get_serving_container_health_route(self, model_name) -> str:
         return f"/v1/models/{model_name}"

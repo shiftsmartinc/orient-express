@@ -2,11 +2,11 @@ import os
 import tempfile
 import warnings
 
-import yaml
 import joblib
-from google.cloud import storage, aiplatform
+import yaml
+from google.cloud import aiplatform, storage
 
-from .predictors import get_predictor, Predictor
+from .predictors import Predictor, get_predictor
 
 ARTIFACT_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 _last_vertex_init: tuple[str, str] | None = None
@@ -96,7 +96,8 @@ def vertex_init(project_name: str, region: str):
             f"'{region}' (was project '{_last_vertex_init[0]}' region "
             f"'{_last_vertex_init[1]}'). The SDK holds this state globally: models "
             "and endpoints obtained before this call remain bound to the previous "
-            "project/region."
+            "project/region.",
+            stacklevel=2,
         )
     aiplatform.init(project=project_name, location=region)
     _last_vertex_init = (project_name, region)
@@ -304,7 +305,8 @@ def get_vertex_model(
             return None
     if len(models) > 1:
         warnings.warn(
-            f"Multiple models found with name '{model_name}'. Using the latest one."
+            f"Multiple models found with name '{model_name}'. Using the latest one.",
+            stacklevel=2,
         )
 
     latest_model = sorted(models, key=lambda x: x.update_time, reverse=True)[0]
@@ -317,10 +319,10 @@ def get_vertex_model(
 
     try:
         model = aiplatform.Model(model_name=resource_name, version=str(version))
-    except Exception:
+    except Exception as e:
         if raise_exception:
             raise Exception(
                 f"Failed to fetch model '{model_name}' with version '{version}' in registry for project '{project_name}' region '{region}'"
-            )
+            ) from e
         return None
     return VertexModel(model, model_name, project_name, region, version)

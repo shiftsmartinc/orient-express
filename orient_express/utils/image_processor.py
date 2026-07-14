@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 
 import cv2
 import numpy as np
-from PIL import Image, ExifTags
 import requests
+from PIL import ExifTags, Image
 
 from .gs import get_gcs_from_http_url, read_file_bytes
 
