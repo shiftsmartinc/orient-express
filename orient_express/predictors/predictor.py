@@ -11,7 +11,7 @@ import yaml
 from PIL import Image
 
 from ..utils.colors import generate_color_scheme
-from ..utils.image_processor import image_to_array
+from ..utils.image_processor import image_to_array, image_to_base64
 from ..utils.paths import get_metadata_path
 
 IMAGE_ONNX_IMAGE_REPO = (
@@ -104,6 +104,25 @@ class ImagePredictor(Predictor):
 
     def get_serving_container_predict_route(self, model_name):
         return f"/v1/models/{model_name}:predict"
+
+    def to_response(self, image: Image.Image, prediction, include_debug: bool = True):
+        """Per-image response dict served by the inference container.
+
+        The shape is part of the serving API — existing clients parse the
+        `status`/`predictions`/`debug_image` keys.
+        """
+        if isinstance(prediction, list):
+            predictions_json = [single.to_dict() for single in prediction]
+        else:
+            predictions_json = prediction.to_dict()
+        response = {"status": "success", "predictions": predictions_json}
+        if include_debug:
+            debug_image = self.get_annotated_image(image, prediction)
+            if debug_image is None:
+                response["debug_image"] = None
+            else:
+                response["debug_image"] = image_to_base64(debug_image)
+        return response
 
     def dump(self, dir: str):
         metadata = {
