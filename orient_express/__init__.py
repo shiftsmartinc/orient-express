@@ -9,11 +9,20 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .model_wrapper import JoblibSimpleLoader, ModelExpress
+    from .vertex import (
+        VertexModel,
+        get_vertex_model,
+        upload_model,
+        upload_model_joblib,
+        vertex_init,
+    )
 
 _EXPORTS = {
-    "JoblibSimpleLoader": ".model_wrapper",
-    "ModelExpress": ".model_wrapper",
+    "VertexModel": ".vertex",
+    "get_vertex_model": ".vertex",
+    "upload_model": ".vertex",
+    "upload_model_joblib": ".vertex",
+    "vertex_init": ".vertex",
 }
 
 __all__ = list(_EXPORTS)
