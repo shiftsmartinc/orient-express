@@ -40,6 +40,12 @@ server = [
     "python-json-logger>=4.0,<5",
 ]
 
+# kserve pins psutil<6, but psutil 5.x ships no Linux arm64 wheels, so local
+# Docker builds on Apple Silicon fail compiling it from source. kserve's only
+# psutil call (Process().cpu_affinity()) is unchanged in 6/7, so override.
+[tool.uv]
+override-dependencies = ["psutil>=7"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
