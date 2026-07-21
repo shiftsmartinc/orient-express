@@ -6,7 +6,7 @@ import yaml
 from PIL import Image
 
 from ..utils.paths import get_metadata_path
-from .predictor import ImagePredictor, OnnxSessionWrapper
+from .predictor import ImagePredictor
 
 
 @dataclass
@@ -19,37 +19,27 @@ class FeaturePrediction:
         }
 
 
-class OnnxFeatureExtractor(OnnxSessionWrapper):
-    def __call__(self, pil_images: list[Image.Image]):
-        images_array = self.collate_images(pil_images)
-        input_dict = {self.input_names[0]: images_array}
-        features = self.session.run(None, input_dict)[0]
-        return features
-
-
 class FeatureExtractionPredictor(ImagePredictor):
     model_type = "feature-extraction-onnx"
-    backend_model = OnnxFeatureExtractor
 
-    def __init__(self, model_path: str, device: str = "cpu"):
-        self.model = self.backend_model(model_path, device)
-        self.model_path = model_path
+    def __init__(self, model_path: str, device: str = "cpu", **kwargs):
+        super().__init__(model_path, classes=None, device=device, **kwargs)
 
     @classmethod
-    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu"):
+    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu", **kwargs):
         if "model_file" not in metadata:
             raise Exception("No model_file defined in metadata.yaml")
         onnx_path = os.path.join(dir, metadata["model_file"])
-        return cls(onnx_path, device)
+        return cls(onnx_path, device, **kwargs)
 
     def predict(self, images: list[Image.Image]) -> list[FeaturePrediction]:
         if not images:
             return []
-        raw_outputs = self.model(images)
-        outputs = []
-        for feature in raw_outputs:
-            outputs.append(FeaturePrediction(feature=feature))
-        return outputs
+        feed = self.preprocess(images)
+        return self.postprocess(self.infer(feed), feed)
+
+    def postprocess(self, outputs, feed) -> list[FeaturePrediction]:
+        return [FeaturePrediction(feature=feature) for feature in outputs[0]]
 
     def get_annotated_image(self, image: Image.Image, predictions: FeaturePrediction):
         return None

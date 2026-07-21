@@ -12,6 +12,7 @@ from .instance_segmentation import (
     InstanceSegmentationPrediction,
     InstanceSegmentationPredictor,
 )
+from .loader import ImageLoader
 from .multi_label_classification import (
     MultiLabelClassificationPrediction,
     MultiLabelClassificationPredictor,
@@ -22,21 +23,28 @@ from .semantic_segmentation import (
     SemanticSegmentationPrediction,
     SemanticSegmentationPredictor,
 )
+from .streaming import flat_map_stream, map_stream
 from .vector_index import CropSpec, SearchResult, VectorIndex, build_vector_index
 
 T = TypeVar("T")
 
 
 @overload
-def get_predictor(dir: str, device: str = "cpu") -> Any: ...
+def get_predictor(dir: str, device: str = "cpu", **kwargs: Any) -> Any: ...
 
 
 @overload
-def get_predictor(dir: str, device: str = "cpu", *, expected_type: type[T]) -> T: ...
+def get_predictor(
+    dir: str, device: str = "cpu", *, expected_type: type[T], **kwargs: Any
+) -> T: ...
 
 
 def get_predictor(
-    dir: str, device: str = "cpu", *, expected_type: type[T] | None = None
+    dir: str,
+    device: str = "cpu",
+    *,
+    expected_type: type[T] | None = None,
+    **kwargs: Any,
 ) -> Any:
     """Load whatever model artifact lives in `dir`.
 
@@ -45,9 +53,17 @@ def get_predictor(
     to narrow the type for the checker and assert it at runtime:
 
         predictor = get_predictor(dir, expected_type=BoundingBoxPredictor)
+
+    Extra keyword arguments are forwarded to the predictor constructor via
+    from_dir (e.g. provider_options, trt_enforce_profile); joblib artifacts
+    accept none.
     """
     metadata_path = get_metadata_path(dir)
     if not os.path.exists(metadata_path):
+        if kwargs:
+            raise TypeError(
+                f"joblib artifacts accept no predictor options: {sorted(kwargs)}"
+            )
         logging.warning(
             f"No metadata.yaml file found in {dir}. Will try to load model from joblib file."
         )
@@ -61,12 +77,16 @@ def get_predictor(
         if "model_file" not in metadata:
             raise Exception("No model_file defined in metadata.yaml")
         if model_type == "joblib":
+            if kwargs:
+                raise TypeError(
+                    f"joblib artifacts accept no predictor options: {sorted(kwargs)}"
+                )
             predictor = joblib.load(os.path.join(dir, metadata["model_file"]))
         else:
             predictor_class = PREDICTOR_REGISTRY.get(model_type)
             if predictor_class is None:
                 raise Exception(f"Unknown model_type '{model_type}'")
-            predictor = predictor_class.from_dir(dir, metadata, device)
+            predictor = predictor_class.from_dir(dir, metadata, device, **kwargs)
     if expected_type is not None and not isinstance(predictor, expected_type):
         raise TypeError(
             f"Expected {expected_type.__name__} but artifact in {dir} loaded as "

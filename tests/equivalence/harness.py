@@ -27,6 +27,7 @@ MANIFEST_ENV = "ORIENT_EXPRESS_TEST_MANIFEST"
 DOCKER_IMAGE_ENV = "ORIENT_EXPRESS_TEST_DOCKER_IMAGE"
 GOLDENS_DIR_ENV = "ORIENT_EXPRESS_TEST_GOLDENS_DIR"  # local override (else GCS)
 REPORT_ENV = "ORIENT_EXPRESS_TEST_REPORT"  # report path override
+DEVICE_ENV = "ORIENT_EXPRESS_TEST_DEVICE"  # predictor device (default cpu)
 
 DEFAULT_TOLERANCES = {
     "score_atol": 1e-3,
@@ -169,7 +170,8 @@ def load_case_images(case_dir: str) -> dict[str, Image.Image]:
 def load_case_predictor(case_dir: str):
     from orient_express.predictors import get_predictor
 
-    return get_predictor(os.path.join(case_dir, "model"))
+    device = os.environ.get(DEVICE_ENV, "cpu")
+    return get_predictor(os.path.join(case_dir, "model"), device)
 
 
 def case_model_type(case_dir: str) -> str:

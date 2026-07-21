@@ -14,7 +14,7 @@ from orient_express.predictors.semantic_segmentation import (
 
 
 class TestSemanticSegmentationPredictor:
-    """Tests for SemanticSegmentationPredictor and OnnxSemanticSegmentation."""
+    """Tests for SemanticSegmentationPredictor."""
 
     @pytest.fixture
     def mock_semantic_session(self, mock_onnx_session):
@@ -28,7 +28,7 @@ class TestSemanticSegmentationPredictor:
     def test_empty_input(self, mock_semantic_session, class_mapping):
         """Predict with empty list returns empty list."""
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_semantic_session,
         ):
             predictor = SemanticSegmentationPredictor("fake.onnx", class_mapping)
@@ -43,7 +43,7 @@ class TestSemanticSegmentationPredictor:
         mock_semantic_session.run_outputs = [np.zeros((3, 3, 64, 64))]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_semantic_session,
         ):
             predictor = SemanticSegmentationPredictor("fake.onnx", class_mapping)
@@ -61,7 +61,7 @@ class TestSemanticSegmentationPredictor:
         mock_semantic_session.run_outputs = [np.zeros((1, 3, 64, 64))]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_semantic_session,
         ):
             predictor = SemanticSegmentationPredictor("fake.onnx", class_mapping)
@@ -86,7 +86,7 @@ class TestSemanticSegmentationPredictor:
         mock_semantic_session.run_outputs = [masks]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_semantic_session,
         ):
             predictor = SemanticSegmentationPredictor("fake.onnx", class_mapping)
@@ -110,7 +110,7 @@ class TestSemanticSegmentationPredictor:
         mock_semantic_session.run_outputs = [masks]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_semantic_session,
         ):
             predictor = SemanticSegmentationPredictor("fake.onnx", class_mapping)
@@ -129,7 +129,7 @@ class TestSemanticSegmentationPredictor:
         mock_semantic_session.run_outputs = [np.zeros((1, 3, 50, 50))]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_semantic_session,
         ):
             predictor = SemanticSegmentationPredictor("fake.onnx", class_mapping)
@@ -167,7 +167,7 @@ class TestSemanticSegmentationPredictor:
         mock_semantic_session.run_outputs = [masks]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_semantic_session,
         ):
             predictor = SemanticSegmentationPredictor("fake.onnx", class_mapping)

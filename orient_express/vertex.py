@@ -103,7 +103,7 @@ class VertexModel:
 
     @overload
     def get_local_predictor(
-        self, device: str = "cpu", force_download: bool = False
+        self, device: str = "cpu", force_download: bool = False, **kwargs: Any
     ) -> Any: ...
 
     @overload
@@ -113,6 +113,7 @@ class VertexModel:
         force_download: bool = False,
         *,
         expected_type: type[T],
+        **kwargs: Any,
     ) -> T: ...
 
     def get_local_predictor(
@@ -121,6 +122,7 @@ class VertexModel:
         force_download: bool = False,
         *,
         expected_type: type[T] | None = None,
+        **kwargs: Any,
     ) -> Any:
         """Download this model's artifacts (cached) and load a local predictor.
 
@@ -130,6 +132,9 @@ class VertexModel:
             predictor = vertex_model.get_local_predictor(
                 expected_type=BoundingBoxPredictor
             )
+
+        Extra keyword arguments are forwarded to the predictor constructor
+        (e.g. provider_options, trt_enforce_profile).
         """
         # Deferred: pulls onnxruntime/cv2, which vertex-only users never need
         from .predictors import get_predictor
@@ -137,8 +142,8 @@ class VertexModel:
         dir = os.path.join(ARTIFACT_DIR, self.model_name + "-" + str(self.version))
         self.download_artifacts(dir, force_download=force_download)
         if expected_type is None:
-            return get_predictor(dir, device)
-        return get_predictor(dir, device, expected_type=expected_type)
+            return get_predictor(dir, device, **kwargs)
+        return get_predictor(dir, device, expected_type=expected_type, **kwargs)
 
     def download_artifacts(self, dir: str, force_download: bool = True):
         download_artifacts(

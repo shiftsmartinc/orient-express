@@ -11,7 +11,7 @@ from ..utils.image_processor import (
     pil_to_opencv,
     resize_masks,
 )
-from .predictor import ImagePredictor, OnnxSessionWrapper
+from .predictor import ImagePredictor
 
 
 @dataclass
@@ -31,52 +31,51 @@ class SemanticSegmentationPrediction:
         return dict_repr
 
 
-class OnnxSemanticSegmentation(OnnxSessionWrapper):
-    def __call__(self, pil_images: list[Image.Image]):
-        images_array = self.collate_images(pil_images)
-        target_sizes_array = self.collate_sizes(pil_images)
-        input_dict = {self.input_names[0]: images_array}
-        masks = self.session.run(None, input_dict)[0]
-        return self.postprocess(masks, target_sizes_array)
-
-    def postprocess(self, masks: np.ndarray, target_sizes: np.ndarray):
-        results: list[np.ndarray] = []
-        batch_size = masks.shape[0]
-
-        for i in range(batch_size):
-            filtered_masks = masks[i]
-
-            h, w = int(target_sizes[i][0]), int(target_sizes[i][1])
-
-            resized_masks = resize_masks(filtered_masks, h, w)
-
-            results.append(resized_masks)
-
-        return results
-
-
 class SemanticSegmentationPredictor(ImagePredictor):
     model_type = "semantic-segmentation-onnx"
-    backend_model = OnnxSemanticSegmentation
 
     def predict(
         self, images: list[Image.Image], confidence: float = 0.5
     ) -> list[SemanticSegmentationPrediction]:
         if not images:
             return []
-        raw_outputs = self.model(images)
-        outputs = []
-        for masks in raw_outputs:
+        feed = self.preprocess(images)
+        outputs = self.infer(feed)
+        return self.postprocess(outputs, feed, confidence=confidence)
+
+    def preprocess(self, images: list[Image.Image]):
+        # target_sizes is postprocess context, not a model input; infer()
+        # only feeds input_names to the session
+        return {
+            self.input_names[0]: self.collate_images(images),
+            "target_sizes": self.collate_sizes(images),
+        }
+
+    def assemble_feed(self, arrays, sizes):
+        return {
+            self.input_names[0]: np.stack(arrays),
+            "target_sizes": np.array(sizes, dtype=np.float32),
+        }
+
+    def postprocess(
+        self, outputs, feed, confidence: float = 0.5
+    ) -> list[SemanticSegmentationPrediction]:
+        batch_masks = outputs[0]
+        target_sizes = feed["target_sizes"]
+        results = []
+        for i in range(batch_masks.shape[0]):
+            h, w = int(target_sizes[i][0]), int(target_sizes[i][1])
+            masks = resize_masks(batch_masks[i], h, w)
             class_mask = np.argmax(masks, axis=0).astype(np.uint8)
             valid_mask = np.max(masks, axis=0) >= confidence
-            outputs.append(
+            results.append(
                 SemanticSegmentationPrediction(
                     class_mask=class_mask,
                     valid_mask=valid_mask,
                     conf_masks=masks,
                 )
             )
-        return outputs
+        return results
 
     def get_annotated_image(
         self,
