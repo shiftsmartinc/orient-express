@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 
 from ..utils.image_processor import opencv_to_pil, pil_to_opencv, resize_masks
-from .predictor import ImagePredictor, OnnxSessionWrapper
+from .predictor import ImagePredictor
 
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -49,67 +49,49 @@ class InstanceSegmentationPrediction:
         return dict_repr
 
 
-class OnnxInstanceSegmentation(OnnxSessionWrapper):
-    def __call__(self, pil_images: list[Image.Image], confidence: float = 0.5):
-        images_array = self.collate_images(pil_images)
-        target_sizes_array = self.collate_sizes(pil_images)
-
-        input_dict = {
-            self.input_names[0]: images_array,
-            self.input_names[1]: target_sizes_array,
-        }
-
-        boxes, scores, labels, masks = self.session.run(None, input_dict)
-        return self.postprocess(boxes, scores, labels, masks, confidence)
-
-    def postprocess(
-        self,
-        boxes: np.ndarray,
-        scores: np.ndarray,
-        labels: np.ndarray,
-        masks: np.ndarray,
-        confidence: float,
-    ):
-        results: list[tuple[np.ndarray, np.ndarray]] = []
-        batch_size = boxes.shape[0]
-
-        for i in range(batch_size):
-            valid_mask = scores[i] > confidence
-            filtered_boxes = boxes[i][valid_mask]
-            filtered_scores = scores[i][valid_mask]
-            filtered_labels = labels[i][valid_mask]
-            # masks stay at model resolution ([num_valid, H_mask, W_mask],
-            # typically ~100x100); resizing to image size happens lazily via
-            # resized_mask(image) / resize_masks(image, predictions).
-            filtered_masks = masks[i][valid_mask]
-
-            result = np.column_stack(
-                [
-                    filtered_boxes,
-                    filtered_scores.reshape(-1, 1),
-                    filtered_labels.reshape(-1, 1),
-                ]
-            )
-
-            results.append((result, filtered_masks))
-
-        return results
-
-
 class InstanceSegmentationPredictor(ImagePredictor):
     model_type = "instance-segmentation-onnx"
-    backend_model = OnnxInstanceSegmentation
 
     def predict(
         self, images: list[Image.Image], confidence: float
     ) -> list[list[InstanceSegmentationPrediction]]:
         if not images:
             return []
-        raw_outputs = self.model(images, confidence)
-        outputs = []
-        for boxes, masks in raw_outputs:
-            outputs.append(self.format_output(boxes, masks))
-        return outputs
+        feed = self.preprocess(images)
+        outputs = self.infer(feed)
+        return self.postprocess(outputs, feed, confidence=confidence)
+
+    def preprocess(self, images: list[Image.Image]):
+        return {
+            self.input_names[0]: self.collate_images(images),
+            self.input_names[1]: self.collate_sizes(images),
+        }
+
+    def assemble_feed(self, arrays, sizes):
+        return {
+            self.input_names[0]: np.stack(arrays),
+            self.input_names[1]: np.array(sizes, dtype=np.float32),
+        }
+
+    def postprocess(
+        self, outputs, feed, confidence: float
+    ) -> list[list[InstanceSegmentationPrediction]]:
+        boxes, scores, labels, masks = outputs
+        results = []
+        for i in range(boxes.shape[0]):
+            valid_mask = scores[i] > confidence
+            result = np.column_stack(
+                [
+                    boxes[i][valid_mask],
+                    scores[i][valid_mask].reshape(-1, 1),
+                    labels[i][valid_mask].reshape(-1, 1),
+                ]
+            )
+            # masks stay at model resolution ([num_valid, H_mask, W_mask],
+            # typically ~100x100); resizing to image size happens lazily via
+            # resized_mask(image) / resize_masks(image, predictions).
+            results.append(self.format_output(result, masks[i][valid_mask]))
+        return results
 
     def format_output(self, boxes: np.ndarray, masks: np.ndarray):
         outputs: list[InstanceSegmentationPrediction] = []

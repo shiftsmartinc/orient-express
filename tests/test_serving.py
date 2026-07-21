@@ -88,7 +88,7 @@ class TestToResponse:
         ]
         session.get_outputs.return_value = []
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", {1: "cat"})
@@ -135,7 +135,7 @@ class TestToResponse:
         ]
         session.get_outputs.return_value = []
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=session,
         ):
             predictor = ClassificationPredictor("fake.onnx", {1: "cat"})

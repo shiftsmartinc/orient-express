@@ -16,12 +16,9 @@ jobs:
       with:
         enable-cache: true
     - name: Install dependencies
-      # onnxruntime-gpu (selected by platform marker on linux-x86_64) needs
-      # CUDA libs at import since 1.27; runners have none, so install the
-      # CPU wheel instead — same swap the serving Dockerfiles do.
-      run: |
-        uv sync --frozen --no-install-package onnxruntime-gpu
-        uv pip install "onnxruntime>=1.20,<2"
+      # the cpu extra selects the lock-pinned CPU onnxruntime; GPU wheels
+      # live in the cuda/tensorrt extras and never install here
+      run: uv sync --frozen --extra cpu
     - name: Lint with ruff
       run: uv run --no-sync ruff check .
     - name: Check formatting with ruff

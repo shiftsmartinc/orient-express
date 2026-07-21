@@ -164,6 +164,8 @@ cython_debug/
 .envrc
 .venv
 
+*.DS_Store
+
 # Ignore artifacts:
 orient_express/artifacts/
 *.onnx

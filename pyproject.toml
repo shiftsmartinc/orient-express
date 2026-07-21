@@ -7,7 +7,7 @@ authors = [
     { name = "Alexey Zankevich", email = "alex.zankevich@shiftsmart.com" },
     { name = "Ian Myers", email = "ian.myers@shiftsmart.com" },
 ]
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "google-cloud-aiplatform>=1.0,<2",
     "google-cloud-storage>=3.0,<4",
@@ -19,8 +19,48 @@ dependencies = [
     "opencv-python-headless>=4.11.0,<5",
     "pillow>=10.0.1",
     "tqdm>=4.67.1",
-    "onnxruntime-gpu>=1.20,<2 ; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
-    "onnxruntime>=1.20,<2 ; sys_platform == 'darwin' or platform_machine == 'aarch64' or platform_machine == 'arm64' or (sys_platform == 'win32' and platform_machine == 'ARM64')",
+]
+
+# onnxruntime ships in extras so CPU-only users don't download GPU wheels
+# (and vertex-only users need no inference runtime at all). Pick one:
+#   pip install 'orient_express[cpu]'       # CPU EP
+#   pip install 'orient_express[cuda]'      # CUDA EP (bundles CUDA wheels; py>=3.11)
+#   pip install 'orient_express[tensorrt]'  # CUDA EP + TensorRT EP (device="tensorrt")
+[project.optional-dependencies]
+cpu = ["onnxruntime>=1.20,<2"]
+cuda = [
+    # >=1.27 pins the CUDA-13 ORT build so it matches the cu13 wheels below
+    "onnxruntime-gpu>=1.27,<2 ; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+    # CUDA runtime + cuDNN wheels so GPU inference works without a system
+    # CUDA install; ort.preload_dlls() loads them from site-packages
+    "nvidia-cuda-runtime ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cudnn-cu13>=9 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cublas ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cufft ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-curand ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cuda-nvrtc ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+tensorrt = [
+    "orient_express[cuda]",
+    # ORT's TRT EP links libnvinfer.so.10, so TRT 11 wheels won't load
+    "tensorrt-cu13>=10,<11 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+# CUDA-12 stack for machines whose NVIDIA driver predates r580 (CUDA 13's
+# minimum). onnxruntime-gpu 1.27 moved to CUDA 13, so this pins the last
+# CUDA-12 ORT line. Never combine with [cuda]/[tensorrt] — the pins conflict
+# on purpose so a mixed install fails at resolution instead of at runtime.
+cuda12 = [
+    "onnxruntime-gpu>=1.22,<1.27 ; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+    "nvidia-cuda-runtime-cu12 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cudnn-cu12>=9 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cublas-cu12 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cufft-cu12 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-curand-cu12 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cuda-nvrtc-cu12 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+tensorrt12 = [
+    "orient_express[cuda12]",
+    "tensorrt-cu12>=10,<11 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 [dependency-groups]
@@ -50,6 +90,34 @@ server = [
 # psutil call (Process().cpu_affinity()) is unchanged in 6/7, so override.
 [tool.uv]
 override-dependencies = ["psutil>=7"]
+# The CUDA-12 and CUDA-13 stacks pin conflicting onnxruntime-gpu ranges on
+# purpose; declare them mutually exclusive so uv can lock all extras. cpu is
+# incompatible with every GPU extra for a quieter reason: onnxruntime and
+# onnxruntime-gpu both ship the same `onnxruntime` import package, so
+# co-installing them is order-dependent breakage no resolver reports.
+conflicts = [
+    [{ extra = "cuda" }, { extra = "cuda12" }],
+    [{ extra = "cuda" }, { extra = "tensorrt12" }],
+    [{ extra = "tensorrt" }, { extra = "cuda12" }],
+    [{ extra = "tensorrt" }, { extra = "tensorrt12" }],
+    [{ extra = "cpu" }, { extra = "cuda" }],
+    [{ extra = "cpu" }, { extra = "cuda12" }],
+    [{ extra = "cpu" }, { extra = "tensorrt" }],
+    [{ extra = "cpu" }, { extra = "tensorrt12" }],
+]
+
+# The tensorrt libs packages on PyPI are NVIDIA placeholder sdists whose
+# build downloads the real wheel from pypi.nvidia.com — impossible on
+# machines without a matching NVIDIA wheel (e.g. macOS), which would make
+# `uv lock` fail everywhere but Linux x86_64. Their real dependency lists
+# are empty, so declare that statically and uv never builds the sdists.
+[[tool.uv.dependency-metadata]]
+name = "tensorrt-cu13-libs"
+requires-dist = []
+
+[[tool.uv.dependency-metadata]]
+name = "tensorrt-cu12-libs"
+requires-dist = []
 
 [build-system]
 requires = ["hatchling"]

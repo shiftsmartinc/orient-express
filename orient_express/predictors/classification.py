@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-from .predictor import ImagePredictor, OnnxSessionWrapper
+from .predictor import ImagePredictor
 
 
 @dataclass
@@ -19,28 +19,22 @@ class ClassificationPrediction:
         }
 
 
-class OnnxClassifier(OnnxSessionWrapper):
-    def __call__(self, pil_images: list[Image.Image]):
-        images_array = self.collate_images(pil_images)
-        input_dict = {self.input_names[0]: images_array}
-        scores = self.session.run(None, input_dict)[0]
-        return scores
-
-
 class ClassificationPredictor(ImagePredictor):
     model_type = "classification-onnx"
-    backend_model = OnnxClassifier
 
     def predict(self, images: list[Image.Image]) -> list[ClassificationPrediction]:
         if not images:
             return []
-        raw_outputs = self.model(images)
-        outputs = []
-        for class_scores in raw_outputs:
+        feed = self.preprocess(images)
+        return self.postprocess(self.infer(feed), feed)
+
+    def postprocess(self, outputs, feed) -> list[ClassificationPrediction]:
+        results = []
+        for class_scores in outputs[0]:
             max_class_idx = class_scores.argmax()
             # self.classes is 1-indexed
             max_clss = self.classes.get(max_class_idx + 1, "Unknown")
-            outputs.append(
+            results.append(
                 ClassificationPrediction(
                     clss=max_clss,
                     score=float(class_scores[max_class_idx]),
@@ -51,7 +45,7 @@ class ClassificationPredictor(ImagePredictor):
                     },
                 )
             )
-        return outputs
+        return results
 
     def get_annotated_image(
         self, image: Image.Image, predictions: ClassificationPrediction

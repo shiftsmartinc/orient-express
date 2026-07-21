@@ -43,7 +43,11 @@ def exists(gs_url):
 
 
 def upload_file(
-    file_path, gs_url, read_mode="rb", content_type="application/octet-stream"
+    file_path,
+    gs_url,
+    read_mode="rb",
+    content_type="application/octet-stream",
+    timeout=60,
 ):
     """Upload file to Google Cloud Storage.
 
@@ -52,6 +56,7 @@ def upload_file(
         gs_url (str): Google Cloud Storage URL where the file should be uploaded
         read_mode (str): Mode used to open the local file for reading
         content_type (str): MIME type of the file being uploaded
+        timeout (float): Per-request timeout in seconds (the library default)
     """
     bucket_name, gs_file_path = parse_gcs_url(gs_url)
     storage_client = storage.Client()
@@ -61,7 +66,10 @@ def upload_file(
     # Open file in read binary mode for uploading
     with open(file_path, read_mode) as file_obj:
         blob.upload_from_file(
-            file_obj, content_type=content_type, retry=get_default_retry_policy()
+            file_obj,
+            content_type=content_type,
+            retry=get_default_retry_policy(),
+            timeout=timeout,
         )
 
     logging.info(f"File uploaded to {gs_url}")

@@ -13,7 +13,7 @@ from orient_express.predictors.classification import (
 
 
 class TestClassificationPredictor:
-    """Tests for ClassificationPredictor and OnnxClassifier."""
+    """Tests for ClassificationPredictor."""
 
     @pytest.fixture
     def mock_classifier_session(self, mock_onnx_session):
@@ -27,7 +27,7 @@ class TestClassificationPredictor:
     def test_empty_input(self, mock_classifier_session, class_mapping):
         """Predict with empty list returns empty list without calling session."""
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_classifier_session,
         ):
             predictor = ClassificationPredictor("fake.onnx", class_mapping)
@@ -44,7 +44,7 @@ class TestClassificationPredictor:
         mock_classifier_session.run_outputs = [np.array([[0.1, 0.7, 0.2]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_classifier_session,
         ):
             predictor = ClassificationPredictor("fake.onnx", class_mapping)
@@ -67,7 +67,7 @@ class TestClassificationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_classifier_session,
         ):
             predictor = ClassificationPredictor("fake.onnx", class_mapping)
@@ -88,7 +88,7 @@ class TestClassificationPredictor:
         mock_classifier_session.run_outputs = [np.array([[0.1, 0.8, 0.1]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_classifier_session,
         ):
             predictor = ClassificationPredictor("fake.onnx", class_mapping)
@@ -108,7 +108,7 @@ class TestClassificationPredictor:
         mock_classifier_session.run_outputs = [np.array([[0.2, 0.5, 0.3]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_classifier_session,
         ):
             predictor = ClassificationPredictor("fake.onnx", class_mapping)
@@ -126,7 +126,7 @@ class TestClassificationPredictor:
         mock_classifier_session.run_outputs = [np.array([[0.2, 0.5, 0.3]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_classifier_session,
         ):
             predictor = ClassificationPredictor("fake.onnx", class_mapping)
@@ -143,7 +143,7 @@ class TestClassificationPredictor:
     ):
         """Classification predictor returns None for annotated image."""
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_classifier_session,
         ):
             predictor = ClassificationPredictor("fake.onnx", class_mapping)

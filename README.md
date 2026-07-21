@@ -14,9 +14,35 @@ Both workflows handle versioning, artifact storage in GCS, and integration with 
 
 ## Installation
 
+Pick the inference runtime you need (a bare `pip install orient_express`
+installs no ONNX runtime — fine for registry/upload-only use):
+
 ```bash
-pip install orient_express
+pip install 'orient_express[cpu]'       # CPU inference
+pip install 'orient_express[cuda]'      # NVIDIA GPU; bundles CUDA/cuDNN wheels (py>=3.11)
+pip install 'orient_express[tensorrt]'  # GPU + TensorRT (device="tensorrt"), fastest
 ```
+
+On Linux x86_64 the `cuda` and `tensorrt` extras include the CUDA runtime
+wheels, so they work on machines without a system CUDA installation — only
+the NVIDIA driver is required. (On Windows the GPU extras install the ORT
+wheel only; a system CUDA + cuDNN install is required.) Never install the
+`cpu` extra together with a GPU extra: both ship the same `onnxruntime`
+import package and the winner is install-order-dependent. uv refuses the
+combination outright; with pip it's on you.
+
+The GPU extras above are CUDA-13 builds and need NVIDIA driver r580+. On an
+older driver (r525+), use the CUDA-12 stack instead — same features, older
+ORT line:
+
+```bash
+pip install 'orient_express[cuda12]'      # CUDA EP on driver < r580
+pip install 'orient_express[tensorrt12]'  # + TensorRT EP
+```
+
+Never combine the cu12 and cu13 extras; their pins conflict on purpose so a
+mixed install fails at resolution. If a GPU device fails to load, the error
+message reports your driver version and which stack it supports.
 
 For local development (uses [uv](https://docs.astral.sh/uv/)):
 
@@ -153,41 +179,140 @@ predictions = local_predictor.predict(X_test)
 
 ## ONNX Runtime and Device Support
 
-### Platform Support Matrix
+### Selecting the Execution Device
 
-| Platform | Architecture | ONNX Runtime Package | CUDA Available |
-| -------- | ------------ | -------------------- | -------------- |
-| Linux    | x86_64       | onnxruntime-gpu      | Yes            |
-| Linux    | aarch64      | onnxruntime          | No             |
-| Windows  | x64 (AMD64)  | onnxruntime-gpu      | Yes            |
-| Windows  | ARM64        | onnxruntime          | No             |
-| macOS    | x86_64       | onnxruntime          | No             |
-| macOS    | arm64        | onnxruntime          | No             |
-
-The appropriate package is installed automatically based on your platform.
-
-### Selecting CPU vs CUDA Execution
-
-When loading a predictor, use the `device` parameter to specify the execution provider:
+When loading a predictor, use the `device` parameter to pick the execution
+provider. Requesting a GPU device that can't actually load raises instead of
+silently running on CPU.
 
 ```python
-from orient_express.predictors import ObjectDetectionPredictor
+from orient_express.predictors import BoundingBoxPredictor
 
-# CPU inference (works on all platforms)
-predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cpu")
+predictor = BoundingBoxPredictor("/path/to/model", classes, device="cpu")
 
-# CUDA inference (requires Linux x64 or Windows x64 with CUDA drivers)
-predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cuda")
+# CUDA (Linux/Windows x64, [cuda] extra). Benchmarked on our RF-DETR
+# detector: ~26x over CPU.
+predictor = BoundingBoxPredictor("/path/to/model", classes, device="cuda")
+
+# TensorRT ([tensorrt] extra): ~1.6x over CUDA at fp32; "tensorrt-fp16"
+# is ~3x over CUDA if the model tolerates fp16 (validate accuracy first).
+predictor = BoundingBoxPredictor("/path/to/model", classes, device="tensorrt")
+predictor = BoundingBoxPredictor("/path/to/model", classes, device="tensorrt-fp16")
+
+# same values work when loading from Vertex
+predictor = model.get_local_predictor(device="cuda")
 ```
 
-When using a Vertex AI model:
+### TensorRT Engine Caching
+
+TensorRT compiles the model into a GPU-specific engine on first use (minutes
+for a mid-size model). Engines and timing caches are stored under the
+orient-express cache dir (`ORIENT_EXPRESS_TRT_CACHE_DIR` overrides) and are
+reused across processes, so only the first run on a machine pays the build.
+
+For short-lived workers (e.g. Vertex AI pipelines on a fixed GPU type), set
+
+```bash
+ORIENT_EXPRESS_TRT_CACHE_GCS=gs://my-bucket/trt-cache/my-pool
+```
+
+and workers download prebuilt engines at startup and upload newly built ones
+after inference — each engine build is paid once, org-wide. Cache entries
+are scoped automatically by model content hash, ORT and TensorRT versions,
+optimization profile, and precision, so one bucket prefix serves every
+model and pool: a worker downloads only the entries for exactly what it
+loads. Entries orphaned by model or version bumps are never fetched again —
+add a GCS lifecycle rule on the prefix (e.g. delete after 60 days) to
+garbage-collect them; an evicted live engine just gets rebuilt and
+re-uploaded once.
+
+Uploads run on a background thread and never block inference or process
+exit. Sync failures (including timeouts — per-request limit
+`ORIENT_EXPRESS_TRT_CACHE_TIMEOUT`, default 60s) log a warning and degrade
+to a local build.
+
+Engines are compiled for a shape range (the optimization profile). Declare
+it up front so one engine covers every batch size you send — otherwise TRT
+profiles the first shape it sees and any new shape means another
+multi-minute build:
 
 ```python
-# CPU inference
-predictor = model.get_local_predictor(device="cpu")
+predictor = BoundingBoxPredictor(
+    path, classes, device="tensorrt",
+    provider_options={
+        "trt_profile_min_shapes": "images:1x576x576x3,target_sizes:1x2",
+        "trt_profile_opt_shapes": "images:32x576x576x3,target_sizes:32x2",
+        "trt_profile_max_shapes": "images:32x576x576x3,target_sizes:32x2",
+    },
+)
+```
 
-# CUDA inference
-predictor = model.get_local_predictor(device="cuda")
+Out-of-profile inputs raise by default instead of silently rebuilding (in
+production a rebuild looks like a hung worker); pass
+`trt_enforce_profile=False` to allow rebuilds.
+
+### Streaming and Pipelined Inference
+
+`predict()` is the all-in-one call. Its three stages are also public —
+`preprocess` (CPU), `infer` (GPU), `postprocess` (CPU) — and
+`predict_stream()` pipelines them over any iterable of image batches,
+overlapping data loading and CPU work with GPU inference:
+
+```python
+# any iterable of image batches works; a (payload, images) tuple carries
+# metadata through to (payload, predictions)
+for rows, preds in predictor.predict_stream(my_batches(), confidence=0.4):
+    ...
+```
+
+`ImageLoader` supplies the batches for the common case — an iterable of
+records that each become one image via any `load` function (URL download,
+file read, video frame), with bounded threaded loading and per-item fault
+tolerance. When it feeds `predict_stream` directly it takes a fused fast
+path: each image is resized by the worker that loaded it, so full-size
+images never pile up in memory:
+
+```python
+from orient_express.predictors import ImageLoader
+
+loader = ImageLoader(rows, load=lambda r: download(r["image_url"]),
+                     batch_size=32, workers=8)
+for rows_batch, preds in predictor.predict_stream(loader, confidence=0.4):
+    for row, pred in zip(rows_batch, preds):
+        ...
+```
+
+Measured on real photos over GCS (dg-otc models): 5-6x over the serial
+download-then-predict loop, with the fused path ~20% ahead of generic
+streaming (see `experiments/streaming_benchmark_*.py`).
+
+### Chaining Multiple Models
+
+`map_stream` / `flat_map_stream` are ordered, bounded, threaded stage glue
+for multi-model pipelines. Every stage — including predictors — is an
+iterable transform, so a detection → crop → embed → search → annotate chain
+reads top to bottom and every stage overlaps (measured 5x over the serial
+per-photo loop):
+
+```python
+from orient_express.predictors import ImageLoader, flat_map_stream, map_stream
+
+# keep_original=True: the payload carries (row, image) pairs so later
+# stages can crop from the full-resolution image
+loader = ImageLoader(rows, load=download, batch_size=4, keep_original=True)
+dets = detector.predict_stream(loader, confidence=0.4)
+
+def crop_stage(batch):                       # one image -> one crop batch
+    pairs, det_lists = batch
+    for (row, image), d in zip(pairs, det_lists):
+        yield (row, image, d), make_crops(image, d)
+
+crops  = flat_map_stream(crop_stage, dets, workers=2)
+feats  = extractor.predict_stream(crops)     # second model, batched crops
+scored = map_stream(match_pog, feats, workers=4)          # CPU matching
+done   = map_stream(annotate_and_upload, scored, workers=8)  # render + IO
+for result in done:
+    ...
 ```
 
 ### Pinning Model Versions

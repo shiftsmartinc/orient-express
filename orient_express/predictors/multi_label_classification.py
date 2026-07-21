@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from PIL import Image
 
-from .predictor import ImagePredictor, OnnxSessionWrapper
+from .predictor import ImagePredictor
 
 
 @dataclass
@@ -17,32 +17,28 @@ class MultiLabelClassificationPrediction:
         }
 
 
-class OnnxMultiLabelClassifier(OnnxSessionWrapper):
-    def __call__(self, pil_images: list[Image.Image]):
-        images_array = self.collate_images(pil_images)
-        input_dict = {self.input_names[0]: images_array}
-        scores = self.session.run(None, input_dict)[0]
-        return scores
-
-
 class MultiLabelClassificationPredictor(ImagePredictor):
     model_type = "multi-label-classification-onnx"
-    backend_model = OnnxMultiLabelClassifier
 
     def predict(
         self, images: list[Image.Image], confidence: float
     ) -> list[MultiLabelClassificationPrediction]:
         if not images:
             return []
-        raw_outputs = self.model(images)
-        outputs = []
-        for class_scores in raw_outputs:
+        feed = self.preprocess(images)
+        return self.postprocess(self.infer(feed), feed, confidence=confidence)
+
+    def postprocess(
+        self, outputs, feed, confidence: float
+    ) -> list[MultiLabelClassificationPrediction]:
+        results = []
+        for class_scores in outputs[0]:
             classes = []
             # self.classes is 1-indexed
             for idx, score in enumerate(class_scores):
                 if score > confidence:
                     classes.append(self.classes.get(idx + 1, "Unknown"))
-            outputs.append(
+            results.append(
                 MultiLabelClassificationPrediction(
                     classes=classes,
                     class_scores={
@@ -52,7 +48,7 @@ class MultiLabelClassificationPredictor(ImagePredictor):
                     },
                 )
             )
-        return outputs
+        return results
 
     def get_annotated_image(
         self, image: Image.Image, predictions: MultiLabelClassificationPrediction
