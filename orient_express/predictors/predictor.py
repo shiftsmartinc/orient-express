@@ -12,7 +12,7 @@ from PIL import Image
 from ..utils.colors import generate_color_scheme
 from ..utils.image_processor import image_to_array, image_to_base64
 from ..utils.paths import get_metadata_path
-from .runtime import Device, create_session
+from .runtime import Device, create_session, parse_trt_profile_shapes
 
 IMAGE_ONNX_IMAGE_REPO = (
     "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx"
@@ -112,15 +112,41 @@ class ImagePredictor(Predictor):
         device: str = Device.CPU,
         provider_options: dict | None = None,
     ):
-        self.session = create_session(model_path, device, provider_options)
+        self._trt_profile_bounds = None
+        if device in (Device.TENSORRT, Device.TENSORRT_FP16) and provider_options:
+            # Validate profile syntax before the session is created: ORT
+            # ignores a malformed spec with only a log warning and profiles
+            # the first shape it sees instead of the intended range — and a
+            # late error would come after the full engine build.
+            parsed = {}
+            for key in (
+                "trt_profile_min_shapes",
+                "trt_profile_opt_shapes",
+                "trt_profile_max_shapes",
+            ):
+                spec = provider_options.get(key)
+                if spec:
+                    parsed[key] = parse_trt_profile_shapes(spec)
+            if (
+                "trt_profile_min_shapes" in parsed
+                and "trt_profile_max_shapes" in parsed
+            ):
+                self._trt_profile_bounds = (
+                    parsed["trt_profile_min_shapes"],
+                    parsed["trt_profile_max_shapes"],
+                )
+
+        self.session, self._trt_cache_sync = create_session(
+            model_path, device, provider_options
+        )
 
         self.input_names = [inp.name for inp in self.session.get_inputs()]
         self.output_names = [out.name for out in self.session.get_outputs()]
 
         input_shape = self.session.get_inputs()[0].shape
-        # This library's contract is NHWC uint8 image inputs; an NCHW export
-        # would silently yield resolution=3 and garbage resizes, so refuse
-        # it loudly.
+        # This library's contract is NHWC uint8 image inputs (see
+        # MODEL_REQUIREMENTS.md); an NCHW export would silently yield
+        # resolution=3 and garbage resizes, so refuse it loudly.
         if len(input_shape) == 4 and input_shape[1] == 3 and input_shape[3] != 3:
             raise ValueError(
                 f"Model input '{self.input_names[0]}' has shape {input_shape}, "
@@ -134,6 +160,7 @@ class ImagePredictor(Predictor):
         self.classes = classes or {}
         self.color_scheme = generate_color_scheme(list(self.classes.values()))
         self.model_path = model_path
+        self._seen_feed_shapes: set[tuple] = set()
 
     def preprocess(self, images: list[Image.Image]) -> dict[str, np.ndarray]:
         """CPU stage: images -> feed dict.
@@ -146,7 +173,49 @@ class ImagePredictor(Predictor):
 
     def infer(self, feed: dict[str, np.ndarray]) -> list[np.ndarray]:
         """GPU stage: pure session.run. Releases the GIL while running."""
-        return self.session.run(None, {name: feed[name] for name in self.input_names})
+        if self._trt_profile_bounds is not None:
+            self._check_trt_profile(feed)
+        outputs = self.session.run(
+            None, {name: feed[name] for name in self.input_names}
+        )
+        shapes = tuple(feed[name].shape for name in self.input_names)
+        if shapes not in self._seen_feed_shapes:
+            self._seen_feed_shapes.add(shapes)
+            if self._trt_cache_sync is not None:
+                # TRT builds engines lazily, and only a run with a first-seen
+                # input shape can trigger a build; push fresh cache files to
+                # GCS in the background so the next worker skips the
+                # multi-minute build
+                self._trt_cache_sync.schedule_upload()
+        return outputs
+
+    def _check_trt_profile(self, feed):
+        """Raise on inputs outside the declared TensorRT optimization profile.
+
+        Handing ORT an out-of-profile input fails the call and silently
+        falls back to CUDA for it — in production that is an invisible
+        performance downgrade. Profiles are mandatory for TensorRT devices,
+        so every input is checked against the declared min/max range.
+        """
+        lo, hi = self._trt_profile_bounds
+        for name in self.input_names:
+            shape = tuple(feed[name].shape)
+            lo_dims, hi_dims = lo.get(name), hi.get(name)
+            if lo_dims is None or hi_dims is None:
+                continue
+            fits = len(shape) == len(lo_dims) == len(hi_dims) and all(
+                lo_d <= dim <= hi_d
+                for lo_d, dim, hi_d in zip(lo_dims, shape, hi_dims, strict=True)
+            )
+            if not fits:
+                raise ValueError(
+                    f"TensorRT: input '{name}' has shape {shape}, outside "
+                    f"the declared optimization profile "
+                    f"[{lo_dims}..{hi_dims}]. ORT would fail the call and "
+                    "silently fall back to CUDA for it. Widen "
+                    "trt_profile_min/max_shapes in provider_options to "
+                    "cover this shape."
+                )
 
     def postprocess(self, outputs, feed, **kwargs):
         """CPU stage: raw session outputs -> prediction objects.

@@ -18,24 +18,26 @@ Pick the inference runtime you need (a bare `pip install orient_express`
 installs no ONNX runtime — fine for registry/upload-only use):
 
 ```bash
-pip install 'orient_express[cpu]'    # CPU inference
-pip install 'orient_express[cuda]'   # NVIDIA GPU; bundles CUDA/cuDNN wheels
+pip install 'orient_express[cpu]'       # CPU inference
+pip install 'orient_express[cuda]'      # NVIDIA GPU; bundles CUDA/cuDNN wheels (py>=3.11)
+pip install 'orient_express[tensorrt]'  # GPU + TensorRT (device="tensorrt"), fastest
 ```
 
-On Linux x86_64 the `cuda` extra includes the CUDA runtime wheels, so it
-works on machines without a system CUDA installation — only the NVIDIA
-driver is required. (On Windows the GPU extra installs the ORT wheel only; a
-system CUDA + cuDNN install is required.) Never install the `cpu` extra
-together with a GPU extra: both ship the same `onnxruntime` import package
-and the winner is install-order-dependent. uv refuses the combination
-outright; with pip it's on you.
+On Linux x86_64 the `cuda` and `tensorrt` extras include the CUDA runtime
+wheels, so they work on machines without a system CUDA installation — only
+the NVIDIA driver is required. (On Windows the GPU extras install the ORT
+wheel only; a system CUDA + cuDNN install is required.) Never install the
+`cpu` extra together with a GPU extra: both ship the same `onnxruntime`
+import package and the winner is install-order-dependent. uv refuses the
+combination outright; with pip it's on you.
 
 The GPU extras above are CUDA-13 builds and need NVIDIA driver r580+. On an
 older driver (r525+), use the CUDA-12 stack instead — same features, older
 ORT line:
 
 ```bash
-pip install 'orient_express[cuda12]'
+pip install 'orient_express[cuda12]'      # CUDA EP on driver < r580
+pip install 'orient_express[tensorrt12]'  # + TensorRT EP
 ```
 
 Never combine the cu12 and cu13 extras; their pins conflict on purpose so a
@@ -177,39 +179,109 @@ predictions = local_predictor.predict(X_test)
 
 ## ONNX Runtime and Device Support
 
-Which runtime you get is decided at install time by the extra you pick (see
-[Installation](#installation)): `[cpu]` on any platform, `[cuda]` /
-`[cuda12]` for NVIDIA GPUs on Linux x86_64 and Windows x64.
+What a model export must satisfy to work here (input layout, dynamic
+batch, TensorRT-specific constraints): see
+[MODEL_REQUIREMENTS.md](MODEL_REQUIREMENTS.md).
 
-### Selecting CPU vs CUDA Execution
+### Selecting the Execution Device
 
-When loading a predictor, use the `device` parameter to specify the execution
+When loading a predictor, use the `device` parameter to pick the execution
 provider. Requesting a GPU device that can't actually load raises instead of
-silently running on CPU (in production that fallback is a 10-50x slowdown
-that looks like a working deployment).
+silently running on CPU.
 
 ```python
-from orient_express.predictors import ObjectDetectionPredictor
+from orient_express.predictors import BoundingBoxPredictor
 
 # device is a plain string; orient_express.predictors.Device provides the
 # same values as constants (Device.CUDA == "cuda") if you prefer them
+predictor = BoundingBoxPredictor("/path/to/model", classes, device="cpu")
 
-# CPU inference ([cpu] extra, works on all platforms)
-predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cpu")
+# CUDA (Linux/Windows x64, [cuda] extra). Benchmarked on our RF-DETR
+# detector: ~26x over CPU.
+predictor = BoundingBoxPredictor("/path/to/model", classes, device="cuda")
 
-# CUDA inference ([cuda] extra; Linux x64 or Windows x64 with an NVIDIA driver)
-predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cuda")
-```
+# TensorRT ([tensorrt] extra): ~1.6x over CUDA at fp32; "tensorrt-fp16"
+# is ~3x over CUDA if the model tolerates fp16 (validate accuracy first).
+# TensorRT requires an optimization profile — see TensorRT Engine Caching.
+predictor = BoundingBoxPredictor(
+    "/path/to/model", classes, device="tensorrt", provider_options=PROFILE
+)
+predictor = BoundingBoxPredictor(
+    "/path/to/model", classes, device="tensorrt-fp16", provider_options=PROFILE
+)
 
-When using a Vertex AI model:
-
-```python
-# CPU inference
-predictor = model.get_local_predictor(device="cpu")
-
-# CUDA inference
+# same values work when loading from Vertex
 predictor = model.get_local_predictor(device="cuda")
 ```
+
+### TensorRT Engine Caching
+
+TensorRT compiles the model into a GPU-specific engine on first use (minutes
+for a mid-size model). Engines and timing caches are stored under the
+orient-express cache dir (`ORIENT_EXPRESS_TRT_CACHE_DIR` overrides) and are
+reused across processes, so only the first run on a machine pays the build.
+Least-recently-used entries are evicted once the local cache exceeds
+`ORIENT_EXPRESS_TRT_CACHE_MAX_BYTES` (default 20GB; 0 disables) — an
+evicted engine just rebuilds on its next use.
+
+For short-lived workers (e.g. Vertex AI pipelines on a fixed GPU type), set
+
+```bash
+ORIENT_EXPRESS_TRT_CACHE_GCS=gs://my-bucket/trt-cache/my-pool
+```
+
+and workers download prebuilt engines at startup and upload newly built ones
+after inference — each engine build is paid once, org-wide. Cache entries
+are scoped automatically by model content hash, ORT and TensorRT versions,
+optimization profile, precision, and any other engine-affecting provider
+options, so one bucket prefix serves every
+model and pool: a worker downloads only the entries for exactly what it
+loads. Entries orphaned by model or version bumps are never fetched again —
+add a GCS lifecycle rule on the prefix (e.g. delete after 60 days) to
+garbage-collect them; an evicted live engine just gets rebuilt and
+re-uploaded once.
+
+Uploads run on a background thread and never block inference or process
+exit. Sync failures log a warning and degrade to a local build.
+`ORIENT_EXPRESS_TRT_CACHE_TIMEOUT` (default 60s) bounds each sync call's
+connect/inactivity time AND its retry window, so a GCS outage stalls a
+cold start on the order of the timeout per cache file, not the client's
+120s retry default. An actively streaming download may exceed it; an
+upload currently may not (its whole body shares one deadline).
+
+Measured cold-start cost (RTX 5090, dg-otc detection, 118MB engine,
+~2.5MB/s uplink; session-ready time):
+
+| cold engine build | local cache hit | GCS cache hit |
+|---|---|---|
+| 16.6s | 9.1s | 20.1s |
+
+On a fast-building GPU like this one the GCS hit can cost more than the
+build itself — the org-wide cache pays off when builds are slow relative to
+the download (bigger models, datacenter GPUs like L4, where builds take
+minutes).
+
+Engines are compiled for a shape range (the optimization profile), so one
+engine covers every batch size you send. TensorRT devices require the
+profile — loading raises without one, because TRT would otherwise compile
+for the first shape it sees and any new shape would mean another
+multi-minute build (for a fixed-shape model, declare its exact shapes with
+min = opt = max):
+
+```python
+predictor = BoundingBoxPredictor(
+    path, classes, device="tensorrt",
+    provider_options={
+        "trt_profile_min_shapes": "images:1x576x576x3,target_sizes:1x2",
+        "trt_profile_opt_shapes": "images:32x576x576x3,target_sizes:32x2",
+        "trt_profile_max_shapes": "images:32x576x576x3,target_sizes:32x2",
+    },
+)
+```
+
+Out-of-profile inputs raise a clear error instead of being handed to ORT
+(which would fail the call and silently run it on CUDA — an invisible
+performance downgrade in production).
 
 ### Staged Inference
 

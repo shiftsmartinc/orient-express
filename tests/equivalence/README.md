@@ -29,6 +29,7 @@ publish or attach it anywhere public.
 | `ORIENT_EXPRESS_TEST_DOCKER_IMAGE` | for serving tests | image tag to boot (usually built locally from your branch). |
 | `GOOGLE_CLOUD_PROJECT` | for serving tests | passed into the container so its GCS client can resolve a project (production Vertex provides this itself). |
 | `ORIENT_EXPRESS_TEST_GOLDENS_DIR` | no | local goldens dir instead of GCS — for evaluating **candidate** goldens before uploading. |
+| `ORIENT_EXPRESS_TEST_DEVICE` | no | device for predictor-level cases (`cpu` default; `cuda`, `tensorrt`, `tensorrt-fp16`). Goldens were generated on CPU, so GPU runs measure device drift against the same goldens. |
 | `ORIENT_EXPRESS_TEST_REPORT` | no | report output path (default `test-output/equivalence_report.html`). |
 | `ORIENT_EXPRESS_TEST_CACHE` | no | asset cache dir (default `~/.cache/orient-express-test-assets`). |
 

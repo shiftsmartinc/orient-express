@@ -27,6 +27,7 @@ MANIFEST_ENV = "ORIENT_EXPRESS_TEST_MANIFEST"
 DOCKER_IMAGE_ENV = "ORIENT_EXPRESS_TEST_DOCKER_IMAGE"
 GOLDENS_DIR_ENV = "ORIENT_EXPRESS_TEST_GOLDENS_DIR"  # local override (else GCS)
 REPORT_ENV = "ORIENT_EXPRESS_TEST_REPORT"  # report path override
+DEVICE_ENV = "ORIENT_EXPRESS_TEST_DEVICE"  # predictor device (default cpu)
 
 DEFAULT_TOLERANCES = {
     "score_atol": 1e-3,
@@ -169,7 +170,42 @@ def load_case_images(case_dir: str) -> dict[str, Image.Image]:
 def load_case_predictor(case_dir: str):
     from orient_express.predictors import get_predictor
 
-    return get_predictor(os.path.join(case_dir, "model"))
+    device = os.environ.get(DEVICE_ENV, "cpu")
+    model_dir = os.path.join(case_dir, "model")
+    if device.startswith("tensorrt"):
+        return get_predictor(
+            model_dir, device, provider_options=_batch1_trt_profile(model_dir)
+        )
+    return get_predictor(model_dir, device)
+
+
+def _batch1_trt_profile(model_dir: str) -> dict:
+    """Batch-1 optimization profile for a case model's inputs.
+
+    TensorRT devices require an explicit profile for dynamic-shape models;
+    this suite predicts one image per call, so min=opt=max at batch 1.
+    (Models whose TRT partition has internal dynamic inputs — e.g. uint8
+    exports — will still be rejected by ORT with the internal tensor name;
+    such exports need sanitizing before TRT runs are meaningful anyway.)
+    """
+    import onnxruntime as ort
+
+    with open(os.path.join(model_dir, "metadata.yaml")) as f:
+        model_file = yaml.safe_load(f)["model_file"]
+    session = ort.InferenceSession(
+        os.path.join(model_dir, model_file), providers=["CPUExecutionProvider"]
+    )
+    spec = ",".join(
+        inp.name
+        + ":"
+        + "x".join("1" if not isinstance(d, int) else str(d) for d in inp.shape)
+        for inp in session.get_inputs()
+    )
+    return {
+        "trt_profile_min_shapes": spec,
+        "trt_profile_opt_shapes": spec,
+        "trt_profile_max_shapes": spec,
+    }
 
 
 def case_model_type(case_dir: str) -> str:

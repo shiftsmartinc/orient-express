@@ -162,3 +162,106 @@ def test_get_predictor_joblib_rejects_kwargs(tmp_path):
         yaml.dump({"model_type": "joblib", "model_file": "m.joblib"}, f)
     with pytest.raises(TypeError, match="joblib"):
         get_predictor(str(tmp_path), provider_options={})
+
+
+def test_infer_schedules_cache_upload_only_on_new_shapes(detector):
+    from unittest.mock import MagicMock
+
+    detector._trt_cache_sync = MagicMock()
+    detector.predict(make_images(2), confidence=0.5)
+    detector.predict(make_images(2), confidence=0.5)  # same shapes: no build
+    assert detector._trt_cache_sync.schedule_upload.call_count == 1
+    detector.predict(make_images(3), confidence=0.5)  # new batch size
+    assert detector._trt_cache_sync.schedule_upload.call_count == 2
+
+
+def test_parse_trt_profile_shapes():
+    from orient_express.predictors.runtime import parse_trt_profile_shapes
+
+    assert parse_trt_profile_shapes("images:1x576x576x3,target_sizes:1x2") == {
+        "images": [1, 576, 576, 3],
+        "target_sizes": [1, 2],
+    }
+    with pytest.raises(ValueError, match="Malformed"):
+        parse_trt_profile_shapes("garbage")
+
+
+def test_tensorrt_requires_profile(class_mapping, tmp_path, monkeypatch):
+    # profiles are mandatory for TRT devices: without one, TRT compiles for
+    # the first shape it sees and any other shape means a silent rebuild.
+    # Both checks fire before any session exists.
+    monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORIENT_EXPRESS_TRT_CACHE_GCS", raising=False)
+    model_path = tmp_path / "fake.onnx"
+    model_path.write_bytes(b"weights")
+    with patch("orient_express.predictors.runtime.ort.InferenceSession") as session_cls:
+        with pytest.raises(ValueError, match="requires an explicit TensorRT"):
+            BoundingBoxPredictor(str(model_path), class_mapping, device="tensorrt")
+        with pytest.raises(ValueError, match="missing: trt_profile_opt_shapes"):
+            BoundingBoxPredictor(
+                str(model_path),
+                class_mapping,
+                device="tensorrt",
+                provider_options={
+                    "trt_profile_min_shapes": "images:1x64x64x3,target_sizes:1x2"
+                },
+            )
+        session_cls.assert_not_called()
+
+
+def test_malformed_profile_rejected_before_session_build(class_mapping):
+    # ORT ignores a malformed spec with only a log warning (the engine then
+    # profiles the first shape it sees instead of the intended range), and a
+    # late parse error would come after the multi-minute engine build — so
+    # the spec must be validated before any session is created.
+    with patch("orient_express.predictors.runtime.ort.InferenceSession") as session_cls:
+        with pytest.raises(ValueError, match="Malformed"):
+            BoundingBoxPredictor(
+                "fake.onnx",
+                class_mapping,
+                device="tensorrt",
+                provider_options={"trt_profile_min_shapes": "garbage"},
+            )
+        session_cls.assert_not_called()
+
+
+def test_trt_explicit_profile_enforced(
+    mock_onnx_session, class_mapping, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORIENT_EXPRESS_TRT_CACHE_GCS", raising=False)
+    session = mock_onnx_session(
+        resolution=RESOLUTION,
+        input_names=["images", "target_sizes"],
+        output_names=["boxes", "scores", "labels"],
+    )
+    session.get_providers.return_value = ["TensorrtExecutionProvider"]
+
+    def run(output_names, input_dict):
+        return detection_outputs(len(input_dict["images"]))
+
+    session.run.side_effect = run
+    model_path = tmp_path / "fake.onnx"
+    model_path.write_bytes(b"weights")  # trt_cache_scope hashes the file
+    with (
+        patch(
+            "orient_express.predictors.runtime.ort.InferenceSession",
+            return_value=session,
+        ),
+        patch("orient_express.predictors.runtime._preload_gpu_dlls"),
+        patch("orient_express.predictors.runtime._preload_tensorrt_libs"),
+    ):
+        predictor = BoundingBoxPredictor(
+            str(model_path),
+            class_mapping,
+            device="tensorrt",
+            provider_options={
+                "trt_profile_min_shapes": "images:1x64x64x3,target_sizes:1x2",
+                "trt_profile_opt_shapes": "images:8x64x64x3,target_sizes:8x2",
+                "trt_profile_max_shapes": "images:8x64x64x3,target_sizes:8x2",
+            },
+        )
+
+    predictor.predict(make_images(8), confidence=0.5)  # at the max: fine
+    with pytest.raises(ValueError, match="outside the declared optimization"):
+        predictor.predict(make_images(9), confidence=0.5)
