@@ -1670,6 +1670,7 @@ name = "orient-express"
 version = "3.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "google-cloud-aiplatform" },
     { name = "google-cloud-storage" },
     { name = "joblib" },
@@ -1743,6 +1744,7 @@ server = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9,<4" },
     { name = "google-cloud-aiplatform", specifier = ">=1.0,<2" },
     { name = "google-cloud-storage", specifier = ">=3.0,<4" },
     { name = "joblib", specifier = ">=1.3" },

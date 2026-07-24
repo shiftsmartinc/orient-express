@@ -5,6 +5,7 @@ from typing import Any, TypeVar, overload
 import joblib
 import yaml
 
+from ..utils.image_processor import decode_image
 from ..utils.paths import get_metadata_path
 from .classification import ClassificationPrediction, ClassificationPredictor
 from .feature_extraction import FeatureExtractionPredictor, FeaturePrediction
@@ -12,6 +13,7 @@ from .instance_segmentation import (
     InstanceSegmentationPrediction,
     InstanceSegmentationPredictor,
 )
+from .loader import ImageLoader, UrlImageLoader
 from .multi_label_classification import (
     MultiLabelClassificationPrediction,
     MultiLabelClassificationPredictor,
@@ -23,6 +25,7 @@ from .semantic_segmentation import (
     SemanticSegmentationPrediction,
     SemanticSegmentationPredictor,
 )
+from .streaming import flat_map_stream, map_stream
 from .vector_index import CropSpec, SearchResult, VectorIndex, build_vector_index
 
 T = TypeVar("T")

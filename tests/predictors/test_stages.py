@@ -1,4 +1,4 @@
-"""Tests for the staged inference API (preprocess / infer / postprocess)."""
+"""Tests for the staged inference API and predict_stream pipelining."""
 
 from unittest.mock import patch
 
@@ -265,3 +265,166 @@ def test_trt_explicit_profile_enforced(
     predictor.predict(make_images(8), confidence=0.5)  # at the max: fine
     with pytest.raises(ValueError, match="outside the declared optimization"):
         predictor.predict(make_images(9), confidence=0.5)
+
+
+def test_predict_stream_matches_predict_in_order(detector):
+    batches = [make_images(1), make_images(3), make_images(2)]
+    streamed = list(detector.predict_stream(batches, confidence=0.5))
+    direct = [detector.predict(b, confidence=0.5) for b in batches]
+
+    assert [len(r) for r in streamed] == [1, 3, 2]
+    for s_batch, d_batch in zip(streamed, direct, strict=True):
+        for s, d in zip(s_batch, d_batch, strict=True):
+            assert [p.to_dict() for p in s] == [p.to_dict() for p in d]
+
+
+def test_predict_stream_empty_iterable(detector):
+    assert list(detector.predict_stream([], confidence=0.5)) == []
+
+
+def test_predict_stream_accepts_generator(detector):
+    def gen():
+        for n in (1, 2):
+            yield make_images(n)
+
+    results = list(detector.predict_stream(gen(), confidence=0.5, prefetch=1))
+    assert [len(r) for r in results] == [1, 2]
+
+
+def test_predict_stream_payload_passthrough(detector):
+    def batches():
+        yield "meta-a", make_images(2)
+        yield make_images(1)  # bare batch mixes fine
+        yield {"any": "payload"}, make_images(3)
+
+    results = list(detector.predict_stream(batches(), confidence=0.5))
+
+    assert results[0][0] == "meta-a" and len(results[0][1]) == 2
+    assert len(results[1]) == 1  # bare batch yields bare predictions
+    assert results[2][0] == {"any": "payload"} and len(results[2][1]) == 3
+
+
+def test_predict_stream_propagates_source_errors(detector):
+    def batches():
+        yield make_images(1)
+        raise OSError("source broke")
+
+    stream = detector.predict_stream(batches(), confidence=0.5)
+    with pytest.raises(OSError, match="source broke"):
+        list(stream)
+
+
+def test_predict_stream_empty_batch_yields_empty(detector):
+    results = list(
+        detector.predict_stream([("payload", []), make_images(1)], confidence=0.5)
+    )
+    assert results[0] == ("payload", [])
+    assert len(results[1]) == 1
+
+
+def test_image_loader_batches_and_pairs(detector):
+    from orient_express.predictors import ImageLoader
+
+    images = {f"item{i}": make_images(1)[0] for i in range(7)}
+    loader = ImageLoader(list(images), load=lambda k: images[k], batch_size=3)
+
+    results = list(detector.predict_stream(loader, confidence=0.5))
+
+    items = [item for batch_items, _ in results for item in batch_items]
+    assert items == [f"item{i}" for i in range(7)]
+    assert [len(preds) for _, preds in results] == [3, 3, 1]
+    for batch_items, preds in results:
+        assert len(batch_items) == len(preds)
+
+
+def test_image_loader_skips_failed_loads(detector):
+    from orient_express.predictors import ImageLoader
+
+    failures = []
+
+    def load(item):
+        if item == "bad":
+            raise OSError("download failed")
+        return make_images(1)[0]
+
+    loader = ImageLoader(
+        ["a", "bad", "b"],
+        load=load,
+        batch_size=2,
+        on_error=lambda item, exc: failures.append(item),
+    )
+    results = list(detector.predict_stream(loader, confidence=0.5))
+
+    items = [item for batch_items, _ in results for item in batch_items]
+    assert items == ["a", "b"]
+    assert failures == ["bad"]
+
+
+def test_image_loader_pulls_lazily():
+    from orient_express.predictors import ImageLoader
+
+    pulled = []
+
+    def items():
+        for i in range(100):
+            pulled.append(i)
+            yield i
+
+    loader = ImageLoader(items(), load=lambda i: make_images(1)[0], batch_size=2)
+    next(iter(loader))
+    # bounded by batch_size * (prefetch + 1) and workers, far below 100
+    assert len(pulled) < 40
+
+
+def test_predict_stream_early_exit_unblocks_producer(detector):
+    import threading
+    import time
+
+    baseline = threading.active_count()
+    for _ in range(3):
+        stream = detector.predict_stream(
+            [make_images(1) for _ in range(20)], confidence=0.5
+        )
+        next(stream)
+        stream.close()  # abandon the rest of the stream
+
+    # the producer threads must unblock and exit, not park in queue.put()
+    deadline = time.time() + 5.0
+    while threading.active_count() > baseline and time.time() < deadline:
+        time.sleep(0.01)
+    assert threading.active_count() <= baseline
+
+
+def test_predict_stream_prefetch_overrides_loader(detector):
+    from orient_express.predictors import ImageLoader
+
+    pulled = []
+
+    def items():
+        for i in range(100):
+            pulled.append(i)
+            yield i
+
+    loader = ImageLoader(
+        items(),
+        load=lambda i: make_images(1)[0],
+        batch_size=2,
+        workers=1,
+        prefetch=30,
+    )
+    stream = detector.predict_stream(loader, confidence=0.5, prefetch=1)
+    next(stream)
+    # the loader's own prefetch (30) would pull 60+ items ahead; the explicit
+    # override caps the window at max(batch_size * (1 + 1), workers) = 4
+    assert len(pulled) < 10
+    stream.close()
+
+
+@pytest.mark.parametrize("bad_prefetch", [0, -1, 2.5, "2"])
+def test_predict_stream_rejects_invalid_prefetch(detector, bad_prefetch):
+    with pytest.raises(ValueError, match="prefetch"):
+        next(
+            detector.predict_stream(
+                [make_images(1)], confidence=0.5, prefetch=bad_prefetch
+            )
+        )

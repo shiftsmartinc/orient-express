@@ -67,6 +67,12 @@ class InstanceSegmentationPredictor(ImagePredictor):
             self.input_names[1]: self.collate_sizes(images),
         }
 
+    def assemble_feed(self, arrays, sizes):
+        return {
+            self.input_names[0]: np.stack(arrays),
+            self.input_names[1]: np.array(sizes, dtype=np.float32),
+        }
+
     def postprocess(
         self, outputs, feed, confidence: float
     ) -> list[list[InstanceSegmentationPrediction]]:

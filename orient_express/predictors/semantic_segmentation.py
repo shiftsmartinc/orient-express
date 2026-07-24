@@ -51,6 +51,12 @@ class SemanticSegmentationPredictor(ImagePredictor):
             "target_sizes": self.collate_sizes(images),
         }
 
+    def assemble_feed(self, arrays, sizes):
+        return {
+            self.input_names[0]: np.stack(arrays),
+            "target_sizes": np.array(sizes, dtype=np.float32),
+        }
+
     def postprocess(
         self, outputs, feed, confidence: float = 0.5
     ) -> list[SemanticSegmentationPrediction]:

@@ -283,24 +283,97 @@ Out-of-profile inputs raise a clear error instead of being handed to ORT
 (which would fail the call and silently run it on CUDA — an invisible
 performance downgrade in production).
 
-### Staged Inference
+### Streaming and Pipelined Inference
 
-`predict()` is the all-in-one call. Its three stages are also public, so
-callers can run the CPU work and the GPU work separately (e.g. to overlap
-them across batches):
+`predict()` is the all-in-one call. Its three stages are also public —
+`preprocess` (CPU), `infer` (GPU), `postprocess` (CPU) — and
+`predict_stream()` pipelines them over any iterable of image batches,
+overlapping data loading and CPU work with GPU inference:
 
 ```python
-feed = predictor.preprocess(images)             # CPU: collate + resize
-outputs = predictor.infer(feed)                 # GPU: session.run
-preds = predictor.postprocess(outputs, feed, confidence=0.5)   # CPU
+# any iterable of image batches works; a (payload, images) tuple carries
+# metadata through to (payload, predictions)
+for rows, preds in predictor.predict_stream(my_batches(), confidence=0.4):
+    ...
 ```
 
-`preprocess` returns the model's feed dict (plus any postprocess context,
-which `infer` ignores), and the staged results are identical to
-`predict(images, confidence=0.5)`.
+Two loaders supply the batches; pick by answering one question — do you
+have URLs, or custom loading logic?
 
-Model inputs must be NHWC uint8 (`[batch, height, width, 3]`) — a
-channels-first export is refused at load.
+**`UrlImageLoader`** — your items map to URLs of encoded images (the
+standard case: photos in GCS). The loader owns downloading AND decoding:
+downloads run on an asyncio event loop (object-store latency means high
+throughput needs hundreds of requests in flight, which threads pay GIL
+tax to hold), decoding runs on cv2, which releases the GIL. `gs://` and
+`storage.googleapis.com` URLs authenticate via application-default
+credentials automatically.
+
+```python
+from orient_express.predictors import UrlImageLoader
+
+loader = UrlImageLoader(rows, url=lambda r: r["image_url"], batch_size=32)
+for rows_batch, preds in predictor.predict_stream(loader, confidence=0.4):
+    for row, pred in zip(rows_batch, preds):
+        ...
+```
+
+`decode="fast"` additionally decodes JPEGs at reduced scale sized to the
+model's input resolution — measurably faster, but pixels differ from a
+full decode: validate model accuracy before enabling it.
+
+**`ImageLoader`** — you provide any per-item `load` callable returning a
+PIL image (file read, video frame, crop, custom auth), run on `workers`
+threads with bounded look-ahead and per-item fault tolerance. Rule of
+thumb for `workers` against a high-latency source: ≈ target img/s ×
+per-request seconds (the default 32 covers ~60-70 img/s at typical GCS
+latency). If you fetch encoded bytes yourself, `decode_image(data)` is
+the fast cv2-backed decode (pixel-identical to PIL for baseline JPEGs):
+
+```python
+from orient_express.predictors import ImageLoader, decode_image
+
+loader = ImageLoader(rows, load=lambda r: decode_image(my_bytes(r)),
+                     batch_size=32)
+```
+
+Either loader fuses with `predict_stream`: each image is resized by the
+worker that loaded it, so full-size images never pile up in memory, and
+failed items are skipped and reported to `on_error` in both.
+
+Measured on real photos over GCS (dg-otc models, 8-vCPU GCE worker):
+threaded `ImageLoader` streams 5-7x over the serial download-then-predict
+loop; `UrlImageLoader` sustains ~3-4x `ImageLoader`'s ingest rate on top
+of that (see `experiments/streaming_benchmark_*.py` and the download
+investigation in the GPU test log).
+
+### Chaining Multiple Models
+
+`map_stream` / `flat_map_stream` are ordered, bounded, threaded stage glue
+for multi-model pipelines. Every stage — including predictors — is an
+iterable transform, so a detection → crop → embed → search → annotate chain
+reads top to bottom and every stage overlaps (measured 5x over the serial
+per-photo loop):
+
+```python
+from orient_express.predictors import ImageLoader, flat_map_stream, map_stream
+
+# keep_original=True: the payload carries (row, image) pairs so later
+# stages can crop from the full-resolution image
+loader = ImageLoader(rows, load=download, batch_size=4, keep_original=True)
+dets = detector.predict_stream(loader, confidence=0.4)
+
+def crop_stage(batch):                       # one image -> one crop batch
+    pairs, det_lists = batch
+    for (row, image), d in zip(pairs, det_lists):
+        yield (row, image, d), make_crops(image, d)
+
+crops  = flat_map_stream(crop_stage, dets, workers=2)
+feats  = extractor.predict_stream(crops)     # second model, batched crops
+scored = map_stream(match_pog, feats, workers=4)          # CPU matching
+done   = map_stream(annotate_and_upload, scored, workers=8)  # render + IO
+for result in done:
+    ...
+```
 
 ### Pinning Model Versions
 
