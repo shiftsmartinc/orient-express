@@ -1,8 +1,49 @@
 """ONNX Runtime session construction: devices and execution providers."""
 
+import ctypes
+import glob
+import os
 import subprocess
 
-import onnxruntime as ort
+
+def _preload_cuda_runtime():
+    """Load libcudart from the nvidia wheels before onnxruntime is imported.
+
+    The GPU onnxruntime build links libcudart directly, so `import
+    onnxruntime` fails outright when the dynamic loader can't find it — and
+    ORT's own preload_dlls() is defined past that failing import, so it
+    cannot help. The cuda extras ship libcudart inside the nvidia wheels,
+    which sit off the default loader path; loading it RTLD_GLOBAL here is
+    what lets an image with no system CUDA install (e.g. a slim python base
+    image) work without LD_LIBRARY_PATH. Loading by SONAME satisfies the
+    extension's link at import. A CPU-only install has no such wheel and
+    falls through untouched.
+    """
+    import sys
+
+    for entry in sys.path:
+        if not entry:
+            continue
+        pattern = os.path.join(entry, "nvidia", "*", "lib", "libcudart.so.*")
+        for lib in sorted(glob.glob(pattern), reverse=True):
+            try:
+                ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+                return
+            except OSError:
+                continue
+
+
+_preload_cuda_runtime()
+
+# imported after the preload above, which the GPU build depends on
+try:
+    import onnxruntime as ort  # noqa: E402
+except ImportError as e:
+    raise ImportError(
+        "onnxruntime is not installed. Install orient_express with an "
+        "inference extra: pip install 'orient_express[cpu]' (CPU) or "
+        "'orient_express[cuda]' (NVIDIA GPU)."
+    ) from e
 
 
 class Device:
@@ -61,15 +102,20 @@ def create_session(model_path: str, device: str, provider_options: dict | None =
         if active != wanted:
             raise RuntimeError(
                 f"Requested device '{device}' ({wanted}) but onnxruntime "
-                f"activated {active}. Check that the GPU onnxruntime build is "
-                f"installed and a GPU is visible.{_driver_hint()}"
+                f"activated {active}. Check that the right extra is "
+                f"installed ('orient_express[cuda]') and a GPU is "
+                f"visible.{_driver_hint()}"
             )
 
     return session
 
 
 def _driver_hint() -> str:
-    """Report the local NVIDIA driver, the usual cause of a GPU-EP load failure."""
+    """Diagnose the most common GPU-EP load failure: driver too old.
+
+    The cuda extra ships CUDA-13 user-space libraries, which need NVIDIA
+    driver r580+; the system CUDA toolkit version is irrelevant.
+    """
     try:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
@@ -78,6 +124,15 @@ def _driver_hint() -> str:
             timeout=5,
         )
         driver = out.stdout.strip().splitlines()[0].strip()
+        major = int(driver.split(".")[0])
     except Exception:  # noqa: BLE001 - diagnosis only
         return " nvidia-smi found no usable NVIDIA driver on this machine."
-    return f" Detected NVIDIA driver {driver}."
+    hint = f" Detected NVIDIA driver {driver}."
+    if major < 580:
+        hint += (
+            " These wheels are CUDA-13 builds, which need driver r580+."
+            " Fix: upgrade the driver, or (datacenter GPUs, e.g. L4) install"
+            " NVIDIA's cuda-compat-13 package in the image, or switch to the"
+            " cuda12 extra."
+        )
+    return hint

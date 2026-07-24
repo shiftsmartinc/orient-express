@@ -14,9 +14,33 @@ Both workflows handle versioning, artifact storage in GCS, and integration with 
 
 ## Installation
 
+Pick the inference runtime you need (a bare `pip install orient_express`
+installs no ONNX runtime — fine for registry/upload-only use):
+
 ```bash
-pip install orient_express
+pip install 'orient_express[cpu]'    # CPU inference
+pip install 'orient_express[cuda]'   # NVIDIA GPU; bundles CUDA/cuDNN wheels
 ```
+
+On Linux x86_64 the `cuda` extra includes the CUDA runtime wheels, so it
+works on machines without a system CUDA installation — only the NVIDIA
+driver is required. (On Windows the GPU extra installs the ORT wheel only; a
+system CUDA + cuDNN install is required.) Never install the `cpu` extra
+together with a GPU extra: both ship the same `onnxruntime` import package
+and the winner is install-order-dependent. uv refuses the combination
+outright; with pip it's on you.
+
+The GPU extras above are CUDA-13 builds and need NVIDIA driver r580+. On an
+older driver (r525+), use the CUDA-12 stack instead — same features, older
+ORT line:
+
+```bash
+pip install 'orient_express[cuda12]'
+```
+
+Never combine the cu12 and cu13 extras; their pins conflict on purpose so a
+mixed install fails at resolution. If a GPU device fails to load, the error
+message reports your driver version and which stack it supports.
 
 For local development (uses [uv](https://docs.astral.sh/uv/)):
 
@@ -153,18 +177,9 @@ predictions = local_predictor.predict(X_test)
 
 ## ONNX Runtime and Device Support
 
-### Platform Support Matrix
-
-| Platform | Architecture | ONNX Runtime Package | CUDA Available |
-| -------- | ------------ | -------------------- | -------------- |
-| Linux    | x86_64       | onnxruntime-gpu      | Yes            |
-| Linux    | aarch64      | onnxruntime          | No             |
-| Windows  | x64 (AMD64)  | onnxruntime-gpu      | Yes            |
-| Windows  | ARM64        | onnxruntime          | No             |
-| macOS    | x86_64       | onnxruntime          | No             |
-| macOS    | arm64        | onnxruntime          | No             |
-
-The appropriate package is installed automatically based on your platform.
+Which runtime you get is decided at install time by the extra you pick (see
+[Installation](#installation)): `[cpu]` on any platform, `[cuda]` /
+`[cuda12]` for NVIDIA GPUs on Linux x86_64 and Windows x64.
 
 ### Selecting CPU vs CUDA Execution
 
@@ -179,10 +194,10 @@ from orient_express.predictors import ObjectDetectionPredictor
 # device is a plain string; orient_express.predictors.Device provides the
 # same values as constants (Device.CUDA == "cuda") if you prefer them
 
-# CPU inference (works on all platforms)
+# CPU inference ([cpu] extra, works on all platforms)
 predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cpu")
 
-# CUDA inference (requires Linux x64 or Windows x64 with CUDA drivers)
+# CUDA inference ([cuda] extra; Linux x64 or Windows x64 with an NVIDIA driver)
 predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cuda")
 ```
 
