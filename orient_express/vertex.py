@@ -200,7 +200,9 @@ def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True)
             relative_path = blob.name.split("/")[-1]
         if not relative_path:  # directory placeholder object
             continue
-        download_path = os.path.join(dir, relative_path)
+        # blob names are always '/'-separated; split so nested paths get
+        # native separators instead of a mixed 'dir\\sub/file' on Windows
+        download_path = os.path.join(dir, *relative_path.split("/"))
         if not force_download and os.path.exists(download_path):
             continue
         os.makedirs(os.path.dirname(download_path), exist_ok=True)
