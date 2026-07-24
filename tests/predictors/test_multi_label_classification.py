@@ -13,7 +13,7 @@ from orient_express.predictors.multi_label_classification import (
 
 
 class TestMultiLabelClassificationPredictor:
-    """Tests for MultiLabelClassificationPredictor and OnnxMultiLabelClassifier."""
+    """Tests for MultiLabelClassificationPredictor."""
 
     @pytest.fixture
     def mock_multi_label_session(self, mock_onnx_session):
@@ -27,7 +27,7 @@ class TestMultiLabelClassificationPredictor:
     def test_empty_input(self, mock_multi_label_session, class_mapping):
         """Predict with empty list returns empty list without calling session."""
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -43,7 +43,7 @@ class TestMultiLabelClassificationPredictor:
         mock_multi_label_session.run_outputs = [np.array([[0.1, 0.7, 0.2]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -65,7 +65,7 @@ class TestMultiLabelClassificationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -86,7 +86,7 @@ class TestMultiLabelClassificationPredictor:
         mock_multi_label_session.run_outputs = [np.array([[0.3, 0.7, 0.6]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -105,7 +105,7 @@ class TestMultiLabelClassificationPredictor:
         mock_multi_label_session.run_outputs = [np.array([[0.2, 0.8, 0.5]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -125,7 +125,7 @@ class TestMultiLabelClassificationPredictor:
         mock_multi_label_session.run_outputs = [np.array([[0.1, 0.2, 0.3]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -143,7 +143,7 @@ class TestMultiLabelClassificationPredictor:
         mock_multi_label_session.run_outputs = [np.array([[0.9, 0.8, 0.7]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -168,7 +168,7 @@ class TestMultiLabelClassificationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -188,7 +188,7 @@ class TestMultiLabelClassificationPredictor:
         mock_multi_label_session.run_outputs = [np.array([[0.9, 0.9, 0.9]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", sparse_mapping)
@@ -205,7 +205,7 @@ class TestMultiLabelClassificationPredictor:
         mock_multi_label_session.run_outputs = [np.array([[0.2, 0.8, 0.6]])]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)
@@ -222,7 +222,7 @@ class TestMultiLabelClassificationPredictor:
     ):
         """Multi-label classification predictor returns None for annotated image."""
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_multi_label_session,
         ):
             predictor = MultiLabelClassificationPredictor("fake.onnx", class_mapping)

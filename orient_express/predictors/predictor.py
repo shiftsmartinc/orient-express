@@ -1,5 +1,4 @@
 import os
-import warnings
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError
@@ -7,13 +6,13 @@ from importlib.metadata import version as _package_version
 
 import cv2
 import numpy as np
-import onnxruntime as ort
 import yaml
 from PIL import Image
 
 from ..utils.colors import generate_color_scheme
 from ..utils.image_processor import image_to_array, image_to_base64
 from ..utils.paths import get_metadata_path
+from .runtime import Device, create_session
 
 IMAGE_ONNX_IMAGE_REPO = (
     "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx"
@@ -60,8 +59,14 @@ class Predictor(ABC):
             PREDICTOR_REGISTRY[model_type] = cls
 
     @classmethod
-    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu") -> "Predictor":
-        """Construct this predictor from a downloaded artifact directory."""
+    def from_dir(
+        cls, dir: str, metadata: dict, device: str = Device.CPU, **kwargs
+    ) -> "Predictor":
+        """Construct this predictor from a downloaded artifact directory.
+
+        Extra keyword arguments are forwarded to the constructor (e.g.
+        provider_options for ImagePredictors).
+        """
         raise NotImplementedError(f"{cls.__name__} does not implement from_dir")
 
     @abstractmethod
@@ -82,24 +87,107 @@ class Predictor(ABC):
 
 
 class ImagePredictor(Predictor):
-    model_type: str
-    backend_model: type
-    prediction_type: type
+    """Image predictor backed directly by an ONNX Runtime session.
 
-    def __init__(self, model_path: str, classes: dict[int, str], device: str = "cpu"):
-        self.model = self.backend_model(model_path, device)
-        self.color_scheme = generate_color_scheme(list(classes.values()))
-        self.classes = classes
+    ORT is the only backend: its TensorRT execution provider performs within
+    ~2% of native TensorRT.
+
+    Inference is split into three public stages so callers can pipeline:
+
+        feed = predictor.preprocess(images)     # CPU: collate/resize
+        outputs = predictor.infer(feed)         # GPU: session.run
+        preds = predictor.postprocess(outputs, feed, **kwargs)  # CPU
+
+    predict() composes the three. cv2.resize and session.run both release
+    the GIL, so the CPU stages of one batch can overlap with inference on
+    another.
+    """
+
+    model_type: str
+
+    def __init__(
+        self,
+        model_path: str,
+        classes: dict[int, str] | None = None,
+        device: str = Device.CPU,
+        provider_options: dict | None = None,
+    ):
+        self.session = create_session(model_path, device, provider_options)
+
+        self.input_names = [inp.name for inp in self.session.get_inputs()]
+        self.output_names = [out.name for out in self.session.get_outputs()]
+
+        input_shape = self.session.get_inputs()[0].shape
+        # This library's contract is NHWC uint8 image inputs; an NCHW export
+        # would silently yield resolution=3 and garbage resizes, so refuse
+        # it loudly.
+        if len(input_shape) == 4 and input_shape[1] == 3 and input_shape[3] != 3:
+            raise ValueError(
+                f"Model input '{self.input_names[0]}' has shape {input_shape}, "
+                "which looks channels-first (NCHW). This library requires "
+                "NHWC image inputs ([batch, height, width, 3]) — re-export "
+                "the model with channels-last inputs."
+            )
+        self.resolution = input_shape[1]
+        self.img_size = (self.resolution, self.resolution)
+
+        self.classes = classes or {}
+        self.color_scheme = generate_color_scheme(list(self.classes.values()))
         self.model_path = model_path
 
+    def preprocess(self, images: list[Image.Image]) -> dict[str, np.ndarray]:
+        """CPU stage: images -> feed dict.
+
+        Subclasses may add entries that are not model inputs (e.g. semantic
+        segmentation's target_sizes); infer() only passes input_names to the
+        session, and postprocess() receives the whole feed for such context.
+        """
+        return {self.input_names[0]: self.collate_images(images)}
+
+    def infer(self, feed: dict[str, np.ndarray]) -> list[np.ndarray]:
+        """GPU stage: pure session.run. Releases the GIL while running."""
+        return self.session.run(None, {name: feed[name] for name in self.input_names})
+
+    def postprocess(self, outputs, feed, **kwargs):
+        """CPU stage: raw session outputs -> prediction objects.
+
+        Receives the feed for context (e.g. target sizes). Subclasses define
+        their own keyword arguments (e.g. confidence).
+        """
+        raise NotImplementedError
+
+    def collate_sizes(self, pil_images: list[Image.Image]):
+        sizes = [[img.size[1], img.size[0]] for img in pil_images]
+        return np.array(sizes, dtype=np.float32)
+
+    def collate_images(self, pil_images: list[Image.Image]):
+        n = len(pil_images)
+        batch = np.empty((n, self.resolution, self.resolution, 3), dtype=np.uint8)
+
+        def collate_one(i):
+            batch[i] = cv2.resize(image_to_array(pil_images[i]), self.img_size)
+
+        # cv2.resize releases the GIL, so batches of full-size photos collate
+        # ~3x faster on a thread pool; batches of small crops (e.g. from
+        # build_vector_index) stay serial — task dispatch would dominate their
+        # ~microsecond resizes. Calibrated empirically, see PR summary.
+        total_input_pixels = sum(img.size[0] * img.size[1] for img in pil_images)
+        if n >= 2 and total_input_pixels >= THREADED_COLLATE_MIN_TOTAL_PIXELS:
+            with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+                list(pool.map(collate_one, range(n)))
+        else:
+            for i in range(n):
+                collate_one(i)
+        return batch
+
     @classmethod
-    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu"):
+    def from_dir(cls, dir: str, metadata: dict, device: str = Device.CPU, **kwargs):
         if "model_file" not in metadata:
             raise Exception("No model_file defined in metadata.yaml")
         if "classes" not in metadata:
             raise Exception("No classes defined in metadata.yaml")
         onnx_path = os.path.join(dir, metadata["model_file"])
-        return cls(onnx_path, metadata["classes"], device)
+        return cls(onnx_path, metadata["classes"], device, **kwargs)
 
     def get_serving_container_image_uri(self):
         return get_image_onnx_container_uri()
@@ -140,60 +228,3 @@ class ImagePredictor(Predictor):
             yaml.dump(metadata, f)
         # model is already saved in the model_path
         return [metadata_path, self.model_path]
-
-
-class OnnxSessionWrapper:
-    def __init__(self, onnx_path: str, device: str = "cpu"):
-        session_options = ort.SessionOptions()
-        session_options.graph_optimization_level = (
-            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        )
-        session_options.enable_mem_pattern = True
-        session_options.enable_cpu_mem_arena = True
-        session_options.enable_mem_reuse = True
-
-        if device == "cpu":
-            providers = ["CPUExecutionProvider"]
-        elif device == "cuda":
-            providers = ["CUDAExecutionProvider"]
-        else:
-            warnings.warn(
-                f"Unknown device '{device}'. Defaulting to CPU. Supported devices: 'cpu', 'cuda'.",
-                stacklevel=2,
-            )
-            providers = ["CPUExecutionProvider"]
-
-        self.session = ort.InferenceSession(
-            onnx_path, providers=providers, sess_options=session_options
-        )
-
-        self.input_names = [inp.name for inp in self.session.get_inputs()]
-        self.output_names = [out.name for out in self.session.get_outputs()]
-
-        input_shape = self.session.get_inputs()[0].shape
-        self.resolution = input_shape[1]
-        self.img_size = (self.resolution, self.resolution)
-
-    def collate_sizes(self, pil_images: list[Image.Image]):
-        sizes = [[img.size[1], img.size[0]] for img in pil_images]
-        return np.array(sizes, dtype=np.float32)
-
-    def collate_images(self, pil_images: list[Image.Image]):
-        n = len(pil_images)
-        batch = np.empty((n, self.resolution, self.resolution, 3), dtype=np.uint8)
-
-        def collate_one(i):
-            batch[i] = cv2.resize(image_to_array(pil_images[i]), self.img_size)
-
-        # cv2.resize releases the GIL, so batches of full-size photos collate
-        # ~3x faster on a thread pool; batches of small crops (e.g. from
-        # build_vector_index) stay serial — task dispatch would dominate their
-        # ~microsecond resizes. Calibrated empirically, see PR summary.
-        total_input_pixels = sum(img.size[0] * img.size[1] for img in pil_images)
-        if n >= 2 and total_input_pixels >= THREADED_COLLATE_MIN_TOTAL_PIXELS:
-            with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
-                list(pool.map(collate_one, range(n)))
-        else:
-            for i in range(n):
-                collate_one(i)
-        return batch

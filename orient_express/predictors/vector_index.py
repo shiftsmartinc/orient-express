@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from ..utils.paths import get_metadata_path
 from .predictor import Predictor, get_image_onnx_container_uri
+from .runtime import Device
 
 
 @dataclass
@@ -152,7 +153,9 @@ class VectorIndex(Predictor):
         return VectorIndex(vectors=centroids, labels=new_labels)
 
     @classmethod
-    def from_dir(cls, dir: str, metadata: dict, device: str = "cpu") -> "VectorIndex":
+    def from_dir(
+        cls, dir: str, metadata: dict, device: str = Device.CPU
+    ) -> "VectorIndex":
         artifact_path = os.path.join(dir, metadata["model_file"])
         data = np.load(artifact_path, allow_pickle=False)
         vectors = data["vectors"]

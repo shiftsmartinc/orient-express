@@ -168,10 +168,16 @@ The appropriate package is installed automatically based on your platform.
 
 ### Selecting CPU vs CUDA Execution
 
-When loading a predictor, use the `device` parameter to specify the execution provider:
+When loading a predictor, use the `device` parameter to specify the execution
+provider. Requesting a GPU device that can't actually load raises instead of
+silently running on CPU (in production that fallback is a 10-50x slowdown
+that looks like a working deployment).
 
 ```python
 from orient_express.predictors import ObjectDetectionPredictor
+
+# device is a plain string; orient_express.predictors.Device provides the
+# same values as constants (Device.CUDA == "cuda") if you prefer them
 
 # CPU inference (works on all platforms)
 predictor = ObjectDetectionPredictor("/path/to/model", classes, device="cpu")
@@ -189,6 +195,25 @@ predictor = model.get_local_predictor(device="cpu")
 # CUDA inference
 predictor = model.get_local_predictor(device="cuda")
 ```
+
+### Staged Inference
+
+`predict()` is the all-in-one call. Its three stages are also public, so
+callers can run the CPU work and the GPU work separately (e.g. to overlap
+them across batches):
+
+```python
+feed = predictor.preprocess(images)             # CPU: collate + resize
+outputs = predictor.infer(feed)                 # GPU: session.run
+preds = predictor.postprocess(outputs, feed, confidence=0.5)   # CPU
+```
+
+`preprocess` returns the model's feed dict (plus any postprocess context,
+which `infer` ignores), and the staged results are identical to
+`predict(images, confidence=0.5)`.
+
+Model inputs must be NHWC uint8 (`[batch, height, width, 3]`) — a
+channels-first export is refused at load.
 
 ### Pinning Model Versions
 
