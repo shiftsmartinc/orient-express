@@ -23,10 +23,9 @@ pip install 'orient_express[cuda]'      # NVIDIA GPU; bundles CUDA/cuDNN wheels 
 pip install 'orient_express[tensorrt]'  # GPU + TensorRT (device="tensorrt"), fastest
 ```
 
-On Linux x86_64 the `cuda` and `tensorrt` extras include the CUDA runtime
+The GPU extras are Linux x86_64 only. They include the CUDA runtime
 wheels, so they work on machines without a system CUDA installation — only
-the NVIDIA driver is required. (On Windows the GPU extras install the ORT
-wheel only; a system CUDA + cuDNN install is required.) Never install the
+the NVIDIA driver is required. Never install the
 `cpu` extra together with a GPU extra: both ship the same `onnxruntime`
 import package and the winner is install-order-dependent. uv refuses the
 combination outright; with pip it's on you.
@@ -196,7 +195,7 @@ from orient_express.predictors import BoundingBoxPredictor
 # same values as constants (Device.CUDA == "cuda") if you prefer them
 predictor = BoundingBoxPredictor("/path/to/model", classes, device="cpu")
 
-# CUDA (Linux/Windows x64, [cuda] extra). Benchmarked on our RF-DETR
+# CUDA (Linux x64, [cuda] extra). Benchmarked on our RF-DETR
 # detector: ~26x over CPU.
 predictor = BoundingBoxPredictor("/path/to/model", classes, device="cuda")
 

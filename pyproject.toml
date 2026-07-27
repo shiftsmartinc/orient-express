@@ -31,7 +31,7 @@ dependencies = [
 cpu = ["onnxruntime>=1.20,<2"]
 cuda = [
     # >=1.27 pins the CUDA-13 ORT build so it matches the cu13 wheels below
-    "onnxruntime-gpu>=1.27,<2 ; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+    "onnxruntime-gpu>=1.27,<2 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     # CUDA runtime + cuDNN wheels so GPU inference works without a system
     # CUDA install; ort.preload_dlls() loads them from site-packages
     "nvidia-cuda-runtime ; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -52,7 +52,7 @@ tensorrt = [
 # CUDA-12 ORT line. Never combine with [cuda]/[tensorrt] — the pins conflict
 # on purpose so a mixed install fails at resolution instead of at runtime.
 cuda12 = [
-    "onnxruntime-gpu>=1.22,<1.27 ; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+    "onnxruntime-gpu>=1.22,<1.27 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "nvidia-cuda-runtime-cu12 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "nvidia-cudnn-cu12>=9,!=9.25.0.15 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "nvidia-cublas-cu12 ; sys_platform == 'linux' and platform_machine == 'x86_64'",

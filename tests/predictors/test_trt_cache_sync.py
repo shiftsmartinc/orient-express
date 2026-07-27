@@ -221,36 +221,38 @@ def test_cache_gc_evicts_lru_scopes(tmp_path, monkeypatch):
     monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_DIR", str(tmp_path))
     monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_MAX_BYTES", "1000")
 
-    oldest = tmp_path / "aaaa-ort1-trt1" / "fp32"
+    oldest = tmp_path / "aaaaaaaaaaaaaaaa-ort1-trt1" / "fp32"
     oldest.mkdir(parents=True)
     (oldest / "x.engine").write_bytes(b"x" * 600)
     os.utime(oldest / "x.engine", (500, 500))
-    newer = tmp_path / "bbbb-ort1-trt1" / "fp32"
+    newer = tmp_path / "bbbbbbbbbbbbbbbb-ort1-trt1" / "fp32"
     newer.mkdir(parents=True)
     (newer / "y.engine").write_bytes(b"y" * 600)
     os.utime(newer / "y.engine", (1000, 1000))
 
     # resolving a scope prunes: 1200 > 1000, oldest goes first, then under cap
-    current = trt_engine_cache_dir("cccc-ort1-trt1/fp32")
+    current = trt_engine_cache_dir("cccccccccccccccc-ort1-trt1/fp32")
     assert not oldest.exists()
     assert newer.exists()
 
     # the in-use scope is never evicted, however old it looks
-    (tmp_path / "cccc-ort1-trt1" / "fp32" / "z.engine").write_bytes(b"z" * 600)
-    os.utime(tmp_path / "cccc-ort1-trt1" / "fp32" / "z.engine", (100, 100))
-    trt_engine_cache_dir("cccc-ort1-trt1/fp32")
-    assert (tmp_path / "cccc-ort1-trt1" / "fp32" / "z.engine").exists()
+    (tmp_path / "cccccccccccccccc-ort1-trt1" / "fp32" / "z.engine").write_bytes(
+        b"z" * 600
+    )
+    os.utime(tmp_path / "cccccccccccccccc-ort1-trt1" / "fp32" / "z.engine", (100, 100))
+    trt_engine_cache_dir("cccccccccccccccc-ort1-trt1/fp32")
+    assert (tmp_path / "cccccccccccccccc-ort1-trt1" / "fp32" / "z.engine").exists()
     assert not newer.exists()  # 1200 > 1000 again; the other scope went
 
     # 0 disables GC entirely
     monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_MAX_BYTES", "0")
-    big = tmp_path / "dddd-ort1-trt1" / "fp32"
+    big = tmp_path / "dddddddddddddddd-ort1-trt1" / "fp32"
     big.mkdir(parents=True)
     (big / "w.engine").write_bytes(b"w" * 5000)
-    trt_engine_cache_dir("cccc-ort1-trt1/fp32")
+    trt_engine_cache_dir("cccccccccccccccc-ort1-trt1/fp32")
     assert big.exists()
 
-    assert current == str(tmp_path / "cccc-ort1-trt1" / "fp32")
+    assert current == str(tmp_path / "cccccccccccccccc-ort1-trt1" / "fp32")
 
 
 def test_trt_cache_scope_keys(tmp_path):
@@ -293,3 +295,163 @@ def test_trt_cache_scope_keys_tf32_env(tmp_path, monkeypatch):
     assert base != trt_cache_scope(str(model), None, fp16=False)
     monkeypatch.setenv("NVIDIA_TF32_OVERRIDE", "1")
     assert trt_cache_scope(str(model), None, fp16=False) != base
+
+
+def test_cache_gc_never_touches_foreign_content(tmp_path, monkeypatch):
+    # eviction candidates are recognized by the exact scope-dir shape this
+    # library mints; anything else under a (possibly shared) cache root —
+    # loose files, foreign dirs, the root itself — must survive GC
+    import os
+
+    from orient_express.predictors.runtime import trt_engine_cache_dir
+
+    monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_MAX_BYTES", "1000")
+
+    loose = tmp_path / "notes.txt"
+    loose.write_bytes(b"n" * 5000)  # over cap on its own, but not ours
+    os.utime(loose, (10, 10))
+    foreign = tmp_path / "some-user-dir"
+    foreign.mkdir()
+    (foreign / "data.bin").write_bytes(b"d" * 5000)
+    os.utime(foreign / "data.bin", (10, 10))
+
+    evictable = tmp_path / ("e" * 16 + "-ort1-trt1") / "fp32"
+    evictable.mkdir(parents=True)
+    (evictable / "x.engine").write_bytes(b"x" * 600)
+    os.utime(evictable / "x.engine", (500, 500))
+    other = tmp_path / ("f" * 16 + "-ort1-trt1") / "fp32"
+    other.mkdir(parents=True)
+    (other / "y.engine").write_bytes(b"y" * 600)
+    os.utime(other / "y.engine", (1000, 1000))
+
+    trt_engine_cache_dir("0" * 16 + "-ort1-trt1/fp32")
+
+    assert tmp_path.exists()
+    assert loose.exists()
+    assert (foreign / "data.bin").exists()
+    # scope-shaped dirs still obey the LRU cap (1200 > 1000)
+    assert not evictable.exists()
+    assert other.exists()
+
+
+def test_download_is_atomic(tmp_path):
+    # a worker killed mid-download must not leave a truncated file at the
+    # final path: it would be trusted forever and re-uploaded over the good
+    # GCS copy. Downloads land in a .part temp and are renamed on success.
+    sync = make_sync(tmp_path)
+    client, bucket, blobs = _gcs_mock([f"trt-cache/{SCOPE}/graph_sm89.engine"])
+    paths_used = []
+
+    def record_path(path, **kw):
+        paths_used.append(path)
+        open(path, "wb").write(b"engine")
+
+    blobs[0].download_to_filename.side_effect = record_path
+    with (
+        patch("google.cloud.storage.Client", return_value=client),
+        patch("orient_express.predictors.runtime._local_sm_tags", return_value=None),
+    ):
+        sync.download()
+
+    assert paths_used == [str(tmp_path / "graph_sm89.engine.part")]
+    assert (tmp_path / "graph_sm89.engine").read_bytes() == b"engine"
+    assert not (tmp_path / "graph_sm89.engine.part").exists()
+
+
+def test_interrupted_download_leaves_no_final_file(tmp_path):
+    sync = make_sync(tmp_path)
+    client, bucket, blobs = _gcs_mock([f"trt-cache/{SCOPE}/graph_sm89.engine"])
+
+    def die_midway(path, **kw):
+        open(path, "wb").write(b"eng")  # partial bytes
+        raise TimeoutError("connection lost")
+
+    blobs[0].download_to_filename.side_effect = die_midway
+    with (
+        patch("google.cloud.storage.Client", return_value=client),
+        patch("orient_express.predictors.runtime._local_sm_tags", return_value=None),
+    ):
+        sync.download()  # best-effort: logs, doesn't raise
+
+    assert not (tmp_path / "graph_sm89.engine").exists()  # nothing to trust
+    # and the leftover temp is never swept up to GCS
+    with patch.object(sync, "_gs") as gs:
+        sync.upload_new()
+        gs.upload_file.assert_not_called()
+
+
+_TEST_PROFILE = {
+    "trt_profile_min_shapes": "images:1x64x64x3",
+    "trt_profile_opt_shapes": "images:1x64x64x3",
+    "trt_profile_max_shapes": "images:1x64x64x3",
+}
+
+
+def _create_session_with_failures(tmp_path, monkeypatch, failures, error):
+    """create_session against a mock ORT that fails `failures` times."""
+    from orient_express.predictors import runtime
+
+    monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("ORIENT_EXPRESS_TRT_CACHE_GCS", raising=False)
+    model = tmp_path / "m.onnx"
+    model.write_bytes(b"weights")
+    good = MagicMock()
+    good.get_providers.return_value = ["TensorrtExecutionProvider"]
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(1)
+        if len(calls) <= failures:
+            raise error
+        return good
+
+    with (
+        patch.object(runtime.ort, "InferenceSession", side_effect=flaky),
+        patch.object(runtime, "_preload_gpu_dlls"),
+        patch.object(runtime, "_preload_tensorrt_libs"),
+    ):
+        session, _ = runtime.create_session(str(model), "tensorrt", _TEST_PROFILE)
+    return session, good, calls
+
+
+def test_corrupt_engine_cache_rebuilds_once(tmp_path, monkeypatch):
+    # ORT hard-fails on a corrupt cached engine and never rebuilds on its
+    # own; create_session clears the scope's cache and retries exactly once
+    from orient_express.predictors.runtime import trt_cache_scope
+
+    monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_DIR", str(tmp_path))
+    model = tmp_path / "m.onnx"
+    model.write_bytes(b"weights")
+    scope = trt_cache_scope(str(model), _TEST_PROFILE, fp16=False)
+    cache_dir = tmp_path / scope
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "graph_sm89.engine").write_bytes(b"torn")
+
+    error = RuntimeError(
+        "TensorRT EP could not deserialize engine from cache: graph_sm89.engine"
+    )
+    session, good, calls = _create_session_with_failures(
+        tmp_path, monkeypatch, failures=1, error=error
+    )
+    assert session is good
+    assert len(calls) == 2
+    assert not (cache_dir / "graph_sm89.engine").exists()  # cleared
+
+
+def test_corrupt_engine_cache_fails_for_real_on_second_failure(tmp_path, monkeypatch):
+    import pytest
+
+    error = RuntimeError("TensorRT EP could not deserialize engine from cache: x")
+    with pytest.raises(RuntimeError, match="deserialize engine"):
+        _create_session_with_failures(tmp_path, monkeypatch, failures=2, error=error)
+
+
+def test_non_cache_session_errors_do_not_retry(tmp_path, monkeypatch):
+    import pytest
+
+    error = RuntimeError("TensorRT EP failed: unsupported op FooBar")
+    with pytest.raises(RuntimeError, match="FooBar"):
+        _, _, calls = _create_session_with_failures(
+            tmp_path, monkeypatch, failures=2, error=error
+        )

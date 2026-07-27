@@ -27,13 +27,24 @@ def jpeg_bytes(seed):
 def image_server():
     images = {f"/img/{i}.jpg": jpeg_bytes(i) for i in range(24)}
     truncated = jpeg_bytes(99)
+    flaky_body = jpeg_bytes(50)
+    flaky_hits: dict[str, int] = {}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path == "/missing.jpg":
+            if self.path.startswith("/flaky/"):
+                # 503 on the first hit of each path, succeed after
+                flaky_hits[self.path] = flaky_hits.get(self.path, 0) + 1
+                if flaky_hits[self.path] == 1:
+                    self.send_error(503)
+                    return
+                body = flaky_body
+            elif self.path == "/missing.jpg":
                 self.send_error(404)
                 return
-            if self.path == "/truncated.jpg":
+            elif self.path == "/empty.jpg":
+                body = b""
+            elif self.path == "/truncated.jpg":
                 body = truncated[: len(truncated) // 2]
             else:
                 body = images.get(self.path)
@@ -69,10 +80,13 @@ def test_batches_ordered_and_complete(image_server):
     assert sizes == [5, 5, 5, 5, 4]
 
 
-def test_bad_items_skipped_and_reported(image_server):
+def test_bad_items_skipped_and_reported(image_server, caplog):
+    import logging
+
     refs = [f"{image_server}/img/{i}.jpg" for i in range(6)]
-    refs.insert(2, f"{image_server}/missing.jpg")  # 404
-    refs.insert(5, f"{image_server}/truncated.jpg")  # decode failure
+    refs.insert(2, f"{image_server}/missing.jpg")  # 404: skipped
+    refs.insert(5, f"{image_server}/truncated.jpg")  # processed, with warning
+    refs.insert(7, f"{image_server}/empty.jpg")  # zero bytes: skipped
     failures = []
     loader = UrlImageLoader(
         refs,
@@ -81,9 +95,14 @@ def test_bad_items_skipped_and_reported(image_server):
         on_error=lambda item, exc: failures.append(item.rsplit("/", 1)[1]),
     )
 
-    seen = [item for payload, _ in loader for item in payload]
-    assert len(seen) == 6
-    assert sorted(failures) == ["missing.jpg", "truncated.jpg"]
+    with caplog.at_level(logging.WARNING):
+        seen = [item for payload, _ in loader for item in payload]
+    # the truncated image is decoded (readable rows + gray fill) and kept;
+    # only the items that yield no pixels at all are skipped
+    assert len(seen) == 7
+    assert f"{image_server}/truncated.jpg" in seen
+    assert sorted(failures) == ["empty.jpg", "missing.jpg"]
+    assert any("truncated" in r.message for r in caplog.records)
 
 
 def test_url_callable_and_payload(image_server):
@@ -166,3 +185,28 @@ def test_early_exit_cleans_up_threads(image_server, detector):
     while threading.active_count() > baseline and time.time() < deadline:
         time.sleep(0.05)
     assert threading.active_count() <= baseline
+
+
+def test_transient_errors_retried(image_server):
+    # object stores throw occasional 429/503s at high concurrency; a
+    # transient failure must cost a retry, not the item
+    refs = [f"{image_server}/img/{i}.jpg" for i in range(3)]
+    refs.insert(1, f"{image_server}/flaky/retried.jpg")  # 503s once
+    loader = UrlImageLoader(refs, batch_size=2, retry_backoff=0.01)
+    seen = [item for payload, _ in loader for item in payload]
+    assert seen == refs  # nothing dropped, order kept
+
+
+def test_retries_zero_reports_transient_failures(image_server):
+    refs = [f"{image_server}/img/{i}.jpg" for i in range(3)]
+    refs.insert(1, f"{image_server}/flaky/dropped.jpg")  # 503s once
+    failures = []
+    loader = UrlImageLoader(
+        refs,
+        batch_size=2,
+        retries=0,
+        on_error=lambda item, exc: failures.append(item),
+    )
+    seen = [item for payload, _ in loader for item in payload]
+    assert len(seen) == 3
+    assert failures == [f"{image_server}/flaky/dropped.jpg"]

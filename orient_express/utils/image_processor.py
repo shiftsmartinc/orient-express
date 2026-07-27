@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import cv2
 import numpy as np
 import requests
-from PIL import ExifTags, Image
+from PIL import ExifTags, Image, ImageOps
 
 from .gs import get_gcs_from_http_url, read_file_bytes
 
@@ -66,27 +66,6 @@ def read_image_from_gs(gs_url) -> Image.Image:
     return image
 
 
-def get_orientation(image):
-    try:
-        exif = image._getexif()
-        if exif is not None:
-            for tag, value in exif.items():
-                if ExifTags.TAGS.get(tag) == "Orientation":
-                    return value
-    except (AttributeError, KeyError, IndexError):
-        return None
-
-
-def rotate_image(image, orientation):
-    if orientation == 3:
-        image = image.rotate(180, expand=True)
-    elif orientation == 6:
-        image = image.rotate(270, expand=True)
-    elif orientation == 8:
-        image = image.rotate(90, expand=True)
-    return image
-
-
 def clean_exif(image):
     if hasattr(image, "_getexif"):
         image.info.pop("exif", None)
@@ -96,11 +75,14 @@ def clean_exif(image):
 
 
 def fix_rotation(image):
-    orientation = get_orientation(image)
-    if orientation:
-        logging.info(f"Rotating image for orientation {orientation}")
-        image = rotate_image(image, orientation)
+    """Return the image EXIF-upright, via the full 8-orientation transform.
 
+    Matches decode_image's cv2 path (cv2 auto-applies EXIF orientation on
+    decode), so the serving path and the streaming loaders agree on phone
+    photos — including the mirrored orientations 2/4/5/7 that the old
+    3/6/8-only rotation passed through untouched.
+    """
+    image = ImageOps.exif_transpose(image)
     return clean_exif(image)
 
 
@@ -146,13 +128,98 @@ _JPEG_REDUCTIONS = (
 )
 
 
-def decode_image(data: bytes, *, fast_target: tuple[int, int] | None = None):
+def _jpeg_scan_start(data: bytes):
+    """Offset of the first SOS marker, walking header segments from SOI.
+
+    Returns None when data is not a JPEG or its header is malformed or cut
+    off before the entropy-coded scan begins.
+    """
+    if data[:2] != b"\xff\xd8":
+        return None
+    pos = 2
+    end = len(data)
+    while pos + 4 <= end:
+        if data[pos] != 0xFF:
+            return None
+        marker = data[pos + 1]
+        if marker == 0xDA:  # SOS: scan data follows
+            return pos
+        if marker == 0xD8 or 0xD0 <= marker <= 0xD7 or marker == 0x01:
+            pos += 2  # standalone markers carry no length field
+            continue
+        segment_length = int.from_bytes(data[pos + 2 : pos + 4], "big")
+        if segment_length < 2:
+            return None
+        pos += 2 + segment_length
+    return None
+
+
+# markers that may legally appear inside/between scans (tables, next scan,
+# comments, app segments); every one carries a two-byte length to skip
+_SCAN_SEGMENT_MARKERS = frozenset(
+    [0xC4, 0xCC, 0xDB, 0xDD, 0xDA, 0xDC, 0xFE, *range(0xE0, 0xF0)]
+)
+
+
+def _jpeg_scan_status(data: bytes):
+    """Classify a JPEG's entropy stream: 'complete', 'truncated' or 'corrupt'.
+
+    Returns None when the data is not a walkable JPEG (the decoders judge
+    those).
+
+    A structural byte walk, not a decode, so it costs a tiny fraction of
+    one. Inside a scan, FF may only be followed by 00 (stuffed data byte),
+    D0-D7 (restart), FF (fill), D9 (EOI), or a segment marker — anything
+    else means the entropy data was damaged (e.g. an interrupted upload
+    that spliced garbage into the stream). Walking from the first SOS
+    makes the truncation verdict immune to EXIF thumbnails (their EOI
+    sits before the scan) and to trailing non-JPEG bytes such as motion
+    photos' appended video (they sit after the real EOI). Damage with no
+    FF violations (e.g. zeroed spans) is invisible here — but libjpeg
+    decodes that without complaint too, so no stream-level check catches
+    it.
+    """
+    pos = _jpeg_scan_start(data)
+    if pos is None:
+        return None
+    pos = pos + 2 + int.from_bytes(data[pos + 2 : pos + 4], "big")  # skip SOS hdr
+    end = len(data)
+    while True:
+        idx = data.find(b"\xff", pos)
+        if idx == -1 or idx + 1 >= end:
+            return "truncated"  # stream ran out with no EOI
+        nxt = data[idx + 1]
+        if nxt == 0x00 or 0xD0 <= nxt <= 0xD7:
+            pos = idx + 2
+        elif nxt == 0xFF:  # fill byte before a marker
+            pos = idx + 1
+        elif nxt == 0xD9:
+            return "complete"
+        elif nxt in _SCAN_SEGMENT_MARKERS:
+            if idx + 4 > end:
+                return "truncated"
+            segment_length = int.from_bytes(data[idx + 2 : idx + 4], "big")
+            if segment_length < 2:
+                return "corrupt"
+            pos = idx + 2 + segment_length
+        else:
+            return "corrupt"
+
+
+def decode_image(
+    data: bytes,
+    *,
+    fast_target: tuple[int, int] | None = None,
+    return_original_size: bool = False,
+):
     """Decode an encoded image (JPEG/PNG/WebP...) to a PIL RGB image, fast.
 
     cv2's decoder releases the GIL where PIL's holds it, so loader worker
-    threads decode in parallel (~2.7x on real photos). Pixels match PIL's
-    for baseline JPEGs — both wrap libjpeg-turbo. Use inside an
-    ImageLoader `load` callable when you fetch encoded bytes yourself:
+    threads decode in parallel. EXIF orientation is
+    applied — the image comes back upright, matching serving's
+    fix_rotation. Pixels otherwise match PIL's for baseline JPEGs (both
+    wrap libjpeg-turbo). Use inside an ImageLoader `load` callable when you
+    fetch encoded bytes yourself:
 
         ImageLoader(rows, load=lambda r: decode_image(my_bytes(r)))
 
@@ -160,15 +227,41 @@ def decode_image(data: bytes, *, fast_target: tuple[int, int] | None = None):
     the largest power-of-two reduction that still covers the target size.
     Faster, but pixels differ from a full decode (DCT-domain downscale);
     validate accuracy before enabling on a production model.
+
+    return_original_size=True returns (image, (width, height)) instead,
+    where the size is the full image's upright dimensions — equal to
+    image.size except under a fast_target reduction.
+
+    Incomplete JPEGs are processed, not lost, and warned about: a file
+    cut off before its EOI marker decodes to the readable rows (missing
+    region gray), and a file with corrupt entropy data mid-stream (the
+    kind strict PIL refuses as "broken data stream") decodes via
+    libjpeg's recovery, damaged areas coming out gray or flat. Detection
+    is a structural marker scan (see _jpeg_scan_status), never a second
+    decode. Data that yields no pixels at all still raises — the
+    contract the loaders' per-item skip depends on.
     """
+    if not data:
+        raise OSError("empty image data (0 bytes)")
     flag = cv2.IMREAD_COLOR
-    if fast_target is not None:
+    original_size = None
+    if fast_target is not None or return_original_size:
         # PIL reads only the header here (no pixel decode); cv2 cannot
         # report dimensions without decoding, and blindly reducing an
         # already-small image would undershoot the target and upscale
-        with Image.open(BytesIO(data)) as probe:
-            width, height = probe.size
-            if probe.format == "JPEG":
+        try:
+            with Image.open(BytesIO(data)) as probe:
+                width, height = probe.size
+                probe_format = probe.format
+                # cv2 applies EXIF orientation but the header size is
+                # pre-rotation; swap for the transposed orientations
+                if probe.getexif().get(ExifTags.Base.Orientation, 1) in (5, 6, 7, 8):
+                    width, height = height, width
+        except Exception:  # noqa: BLE001 - not PIL-readable; decoders below judge
+            pass
+        else:
+            original_size = (width, height)
+            if fast_target is not None and probe_format == "JPEG":
                 for factor, reduced_flag in _JPEG_REDUCTIONS:
                     if (
                         width // factor >= fast_target[0]
@@ -177,24 +270,40 @@ def decode_image(data: bytes, *, fast_target: tuple[int, int] | None = None):
                         flag = reduced_flag
                         break
 
+    status = _jpeg_scan_status(data)
+    if status == "truncated":
+        logging.warning(
+            f"truncated JPEG ({len(data)} bytes, no EOI marker in scan): "
+            "decoding the readable part; the missing region is gray"
+        )
+    elif status == "corrupt":
+        logging.warning(
+            f"corrupt JPEG ({len(data)} bytes, invalid data mid-scan): "
+            "decoding with recovered pixels; damaged regions may appear "
+            "gray or flat"
+        )
+    if status in ("truncated", "corrupt") and not data.rstrip(b"\x00").endswith(
+        b"\xff\xd9"
+    ):
+        # a synthetic EOI lets libjpeg-turbo decode the readable part onto
+        # the full canvas — without it cv2 rejects the whole file
+        data = data + b"\xff\xd9"
+
     array = cv2.imdecode(np.frombuffer(data, np.uint8), flag)
     if array is None:
         # cv2 returns None (never raises) both for corrupt data and for
         # valid formats it can't handle (e.g. CMYK JPEG). PIL is the
         # robust fallback: it decodes the exotic formats and RAISES on
-        # true corruption — the contract ImageLoader's per-item fault
-        # tolerance depends on.
+        # true corruption.
         image = Image.open(BytesIO(data))
         image.load()
-        return image.convert("RGB")
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        return (image, image.size) if return_original_size else image
 
-    if data[:2] == b"\xff\xd8" and not data.rstrip(b"\x00").endswith(b"\xff\xd9"):
-        # Truncated JPEG: cv2 silently returns the decodable part (gray
-        # below) where PIL raises. Keep the promise that bad files are
-        # skipped, not served half-gray.
-        raise OSError("truncated JPEG (missing EOI marker)")
-
-    return Image.fromarray(cv2.cvtColor(array, cv2.COLOR_BGR2RGB))
+    image = Image.fromarray(cv2.cvtColor(array, cv2.COLOR_BGR2RGB))
+    if return_original_size:
+        return image, (original_size or image.size)
+    return image
 
 
 def image_to_array(image: Image.Image):
@@ -215,8 +324,7 @@ def image_to_array(image: Image.Image):
 # Threading pays off only when each per-mask resize is heavy enough to
 # amortize task dispatch AND the whole job is heavy enough to amortize pool
 # setup; small outputs are always faster serial, even for hundreds of masks
-# (calibrated empirically — see the resize experiments in the torch-removal
-# PR summary).
+# (both thresholds calibrated empirically).
 THREADED_RESIZE_MIN_PIXELS_PER_MASK = 100_000
 THREADED_RESIZE_MIN_TOTAL_PIXELS = 8_000_000
 

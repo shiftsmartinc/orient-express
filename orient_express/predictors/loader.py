@@ -31,6 +31,20 @@ class _FetchError:
         self.exc = exc
 
 
+_RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+
+def _is_transient_fetch_error(exc: BaseException) -> bool:
+    import aiohttp
+
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return exc.status in _RETRYABLE_STATUSES
+    return isinstance(
+        exc,
+        (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, TimeoutError),
+    )
+
+
 def _group_batches(results, batch_size: int):
     """Group non-None results into batch_size lists (None = skipped item)."""
     batch = []
@@ -89,11 +103,10 @@ class ImageLoader:
         keep_original: bool = False,
         on_error=None,
     ):
-        # workers=32 default: per-object GCS latency is ~0.5s while
-        # transfer is ~ms, so throughput ≈ workers/latency until CPU
-        # binds — 8 capped real pipelines at ~20 img/s (measured on both
-        # a 24-core workstation and an 8-vCPU L4; 32 is a pure win on
-        # both, larger only helps bigger machines)
+        # workers=32 default: per-object GCS latency is ~0.5s while the
+        # transfer itself takes ~ms, so throughput ≈ workers/latency
+        # until CPU binds — a small pool (8 workers ≈ 16 img/s) caps the
+        # pipeline well below what a typical machine can decode
         self.items = items
         self.load = load
         self.batch_size = batch_size
@@ -107,7 +120,13 @@ class ImageLoader:
         if prefetch is None:
             prefetch = self.prefetch
         window_size = max(self.batch_size * (prefetch + 1), self.workers)
-        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+        # not a `with` block: on early consumer exit (break/GC closes the
+        # generator at the yield) Executor.__exit__ would run every queued
+        # load before returning — with a hanging `load` callable, forever.
+        # cancel_futures drops the queued window; close() only waits out
+        # the loads already executing.
+        pool = ThreadPoolExecutor(max_workers=self.workers)
+        try:
             window: deque = deque()
             it = iter(self.items)
 
@@ -123,6 +142,8 @@ class ImageLoader:
                 out = window.popleft().result()
                 fill()
                 yield out
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def _batches(self, results):
         """Group non-failed results into batch_size lists."""
@@ -187,8 +208,7 @@ class UrlImageLoader:
     (object-store latency demands ~rate x latency requests in flight,
     which thread pools pay GIL tax to hold; one event loop holds hundreds
     of connections for free), and decoding runs on a small thread pool
-    via decode_image (cv2 releases the GIL). Measured on an 8-vCPU GCE
-    worker against GCS photos: ~3-4x ImageLoader's throughput.
+    via decode_image (cv2 releases the GIL).
 
         loader = UrlImageLoader(rows, url=lambda r: r["image_url"])
         for rows_batch, preds in predictor.predict_stream(loader, confidence=0.4):
@@ -198,14 +218,22 @@ class UrlImageLoader:
     application-default credentials automatically; other URLs are fetched
     as-is (pass `headers` for custom auth).
 
-    decode="exact" (default) is pixel-faithful to a PIL decode.
+    decode="exact" (default) is pixel-faithful to a full decode.
     decode="fast" decodes JPEGs at a reduced scale sized to the target
     resolution — faster, but pixels differ: validate model accuracy
-    before using it in production.
+    before using it in production. Prediction coordinates stay in
+    original-photo pixels, UNLESS keep_original=True, in which case they
+    match the reduced image in the payload (so cropping it works
+    unchanged) — see iter_feeds for the full contract.
 
-    Failed downloads and undecodable files are skipped and reported to
-    `on_error`, and results keep input order — the same contract as
-    ImageLoader, so predict_stream fuses with either interchangeably.
+    Transient fetch errors (HTTP 408/429/5xx, connection drops, timeouts)
+    are retried `retries` more times with exponential backoff (retry_backoff
+    seconds, doubling per attempt) — object stores throw occasional 503s at
+    this concurrency, and without retries each one would silently drop an
+    item. Failed downloads (after retries) and undecodable files are
+    skipped and reported to `on_error`, and results keep input order — the
+    same contract as ImageLoader, so predict_stream fuses with either
+    interchangeably.
     """
 
     def __init__(
@@ -223,6 +251,8 @@ class UrlImageLoader:
         on_error=None,
         headers: dict | None = None,
         timeout: float = 60.0,
+        retries: int = 2,
+        retry_backoff: float = 0.5,
     ):
         if decode not in ("exact", "fast"):
             raise ValueError(f"decode must be 'exact' or 'fast', got {decode!r}")
@@ -238,6 +268,8 @@ class UrlImageLoader:
         self.on_error = on_error or _log_load_error
         self.headers = headers or {}
         self.timeout = timeout
+        self.retries = retries
+        self.retry_backoff = retry_backoff
         self._token = None
         self._token_lock = Lock()
 
@@ -309,9 +341,17 @@ class UrlImageLoader:
                     url, headers = await loop.run_in_executor(
                         resolve_pool, self._resolve, item
                     )
-                    async with session.get(url, headers=headers) as response:
-                        response.raise_for_status()
-                        return await response.read()
+                    for attempt in range(self.retries + 1):
+                        try:
+                            async with session.get(url, headers=headers) as response:
+                                response.raise_for_status()
+                                return await response.read()
+                        except Exception as e:  # noqa: BLE001 - filtered below
+                            if attempt == self.retries or not _is_transient_fetch_error(
+                                e
+                            ):
+                                raise
+                        await asyncio.sleep(self.retry_backoff * 2**attempt)
 
                 pending: deque = deque()
                 iterator = iter(self.items)
@@ -344,7 +384,12 @@ class UrlImageLoader:
                 asyncio.run(main())
             except Exception as e:  # noqa: BLE001 - surfaced via queue
                 put(_FetchError(e))
-            put(sentinel)
+            finally:
+                # the sentinel must reach the consumer on EVERY exit path:
+                # a BaseException here (e.g. CancelledError, which is not an
+                # Exception) would otherwise leave it parked in out.get()
+                # forever, silently freezing the whole pipeline
+                put(sentinel)
 
         Thread(target=run, daemon=True, name="url-image-loader").start()
         try:
@@ -385,7 +430,10 @@ class UrlImageLoader:
                 return None
 
         decode_window = max(self.batch_size * (prefetch + 1), self.decode_threads * 2)
-        with ThreadPoolExecutor(max_workers=self.decode_threads) as pool:
+        # try/finally instead of `with`: cancel queued decodes on early
+        # consumer exit rather than running the whole window (see _stream)
+        pool = ThreadPoolExecutor(max_workers=self.decode_threads)
+        try:
             pending: deque = deque()
             for pair in self._byte_stream(self.concurrency):
                 pending.append(pool.submit(safe, pair))
@@ -393,6 +441,8 @@ class UrlImageLoader:
                     yield pending.popleft().result()
             while pending:
                 yield pending.popleft().result()
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def _fast_target(self, default):
         if self.decode != "fast":
@@ -427,6 +477,18 @@ class UrlImageLoader:
         Decode + the predictor's per-item resize run on the decode
         threads; with decode="fast" the JPEG reduction is sized to the
         predictor's input resolution automatically.
+
+        Coordinate space under decode="fast" (with "exact" the two cases
+        coincide, since the decoded image IS the original):
+
+        - keep_original=False: the model is told the ORIGINAL photo's
+          upright dimensions, so predictions (boxes, masks) come back in
+          original-photo pixels — the same values decode="exact" yields.
+        - keep_original=True: the model is told the decoded (reduced)
+          image's dimensions, so predictions line up with the image in the
+          payload — cropping detections out of it works unchanged. To map
+          such predictions onto the original file, scale by
+          original_width / decoded_width.
         """
         from ..utils.image_processor import decode_image
 
@@ -437,8 +499,15 @@ class UrlImageLoader:
         )
 
         def to_feed_part(item, data):
-            image = decode_image(data, fast_target=target)
-            array, size = predictor.preprocess_item(image)
+            if target is not None and not self.keep_original:
+                image, original = decode_image(
+                    data, fast_target=target, return_original_size=True
+                )
+                array, _ = predictor.preprocess_item(image)
+                size = (original[1], original[0])  # (height, width) feed order
+            else:
+                image = decode_image(data, fast_target=target)
+                array, size = predictor.preprocess_item(image)
             return item, (image if self.keep_original else None), array, size
 
         for batch in _group_batches(

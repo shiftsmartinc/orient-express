@@ -1,10 +1,10 @@
 """Ordered, bounded, threaded stage glue for chaining inference streams.
 
 These compose with predict_stream to build multi-stage pipelines (see the
-README's POG example): every stage is an iterable transform, results stay
-in input order, and a bounded window caps memory. Benchmarked on the POG
-chain (download -> detect -> crop -> embed -> vector search -> annotate):
-5.2x over the serial per-photo loop.
+README's detect -> crop -> embed -> search -> annotate example): every
+stage is an iterable transform, results stay in input order, and a bounded
+window caps memory, so all stages run concurrently instead of one photo at
+a time.
 """
 
 from collections import deque
@@ -19,7 +19,12 @@ def map_stream(fn, source, *, workers: int = 1, prefetch: int = 4):
     the stream at that item's position (wrap fn for per-item tolerance).
     """
     it = iter(source)
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    # not a `with` block: on early consumer exit (break/GC closes the
+    # generator here at the yield) Executor.__exit__ would run every queued
+    # future before returning; cancel_futures drops them so close() only
+    # waits out the tasks already executing
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         window: deque = deque()
 
         def fill():
@@ -34,6 +39,8 @@ def map_stream(fn, source, *, workers: int = 1, prefetch: int = 4):
             out = window.popleft().result()
             fill()
             yield out
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def flat_map_stream(fn, source, *, workers: int = 1, prefetch: int = 4):

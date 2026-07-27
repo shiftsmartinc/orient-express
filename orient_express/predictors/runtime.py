@@ -245,16 +245,27 @@ def trt_engine_cache_dir(scope: str) -> str:
     return path
 
 
+# The exact shape of a scope dir minted by trt_cache_scope():
+# <16-hex model hash>-ort<ver>-trt<ver>[-p<8-hex profile hash>]. Pruning
+# recognizes candidates by this shape, so it can only ever delete
+# directories this library created — never the root itself, loose files,
+# or foreign dirs a user co-located under a shared cache root.
+_SCOPE_DIR_RE = re.compile(r"^[0-9a-f]{16}-ort.+-trt.+$")
+_PRECISION_DIRS = ("fp16", "fp32")
+
+
 def _prune_cache_root(root: str, keep: str):
-    """Evict least-recently-used cache dirs once the root exceeds its cap.
+    """Evict least-recently-used cache scopes once the root exceeds its cap.
 
     Every model/profile/option variation mints a scope dir holding a
     ~100MB+ engine forever; without a cap the cache root grows unbounded.
-    Eviction is safe by construction: a live session already deserialized
-    its engine into memory (the file is never re-read), and a delete racing
-    another process's load window just degrades to one rebuild. The scope
-    currently being resolved is never evicted. ORT touches file mtimes on
-    every load, which here is a feature: mtime IS last-used.
+    Only fp16/fp32 leaves of scope-shaped dirs (per _SCOPE_DIR_RE) are
+    measured and evicted. Eviction is safe by construction: a live session
+    already deserialized its engine into memory (the file is never
+    re-read), and a delete racing another process's load window just
+    degrades to one rebuild. The scope currently being resolved is never
+    evicted. ORT touches file mtimes on every load, which here is a
+    feature: mtime IS last-used.
     """
     default = 20 * 1024**3
     raw = os.environ.get("ORIENT_EXPRESS_TRT_CACHE_MAX_BYTES", str(default))
@@ -271,21 +282,30 @@ def _prune_cache_root(root: str, keep: str):
     try:
         keep = os.path.normpath(keep)
         total = 0
-        units = []  # (last_used, size, dirpath) per directory holding files
-        for dirpath, _, filenames in os.walk(root):
-            if not filenames:
+        units = []  # (last_used, size, leaf_path) per fp16/fp32 leaf dir
+        for scope in os.scandir(root):
+            if not scope.is_dir() or not _SCOPE_DIR_RE.match(scope.name):
                 continue
-            stats = [os.stat(os.path.join(dirpath, f)) for f in filenames]
-            size = sum(st.st_size for st in stats)
-            total += size
-            if os.path.normpath(dirpath) != keep:
-                units.append((max(st.st_mtime for st in stats), size, dirpath))
+            for leaf in os.scandir(scope.path):
+                if not leaf.is_dir() or leaf.name not in _PRECISION_DIRS:
+                    continue
+                stats = [f.stat() for f in os.scandir(leaf.path) if f.is_file()]
+                if not stats:
+                    continue
+                size = sum(st.st_size for st in stats)
+                total += size
+                if os.path.normpath(leaf.path) != keep:
+                    units.append((max(st.st_mtime for st in stats), size, leaf.path))
         if total <= cap:
             return
         units.sort()
-        for _, size, dirpath in units:
-            shutil.rmtree(dirpath, ignore_errors=True)
-            logging.info(f"TRT cache over {cap} bytes: evicted {dirpath}")
+        for _, size, leaf_path in units:
+            shutil.rmtree(leaf_path, ignore_errors=True)
+            try:
+                os.rmdir(os.path.dirname(leaf_path))  # scope dir, if now empty
+            except OSError:
+                pass
+            logging.info(f"TRT cache over {cap} bytes: evicted {leaf_path}")
             total -= size
             if total <= cap:
                 return
@@ -300,9 +320,10 @@ def _build_providers(
         return ["CPUExecutionProvider"]
     if device == Device.CUDA:
         _preload_gpu_dlls()
-        # HEURISTIC picks conv algos without benchmarking every candidate.
-        # Measured on our RF-DETR models: steady state within noise of
-        # EXHAUSTIVE; it only guards warmup time on conv-heavy models.
+        # HEURISTIC picks conv algos without benchmarking every candidate,
+        # which mainly cuts warmup time: for detectors light on convolutions
+        # (e.g. RF-DETR) steady state is indistinguishable from EXHAUSTIVE
+        # search.
         options = {"cudnn_conv_algo_search": "HEURISTIC", **(provider_options or {})}
         return [("CUDAExecutionProvider", options), "CPUExecutionProvider"]
     if device in _TRT_DEVICES:
@@ -415,7 +436,13 @@ class _TrtCacheGcsSync:
                     continue
                 local = os.path.join(self.local_dir, name)
                 if not os.path.exists(local):
-                    blob.download_to_filename(local, timeout=self._timeout, retry=retry)
+                    # A worker killed mid-download must never leave a
+                    # truncated file at the final path: the exists() check
+                    # would trust it forever and the crc sweep would push it
+                    # over the good GCS copy, poisoning the whole fleet.
+                    tmp = local + ".part"
+                    blob.download_to_filename(tmp, timeout=self._timeout, retry=retry)
+                    os.replace(tmp, local)
                 # record what GCS holds; if the local file differs (e.g. it
                 # predates this download attempt), the sweep re-pushes it
                 self._synced[name] = blob.crc32c
@@ -455,7 +482,9 @@ class _TrtCacheGcsSync:
         # try: one failed upload must not abandon the rest of the sweep.
         for name in os.listdir(self.local_dir):
             local = os.path.join(self.local_dir, name)
-            if not os.path.isfile(local):
+            # .part files are in-flight downloads (see download()), not
+            # cache content — never push one to GCS
+            if not os.path.isfile(local) or name.endswith(".part"):
                 continue
             try:
                 crc = _crc32c_b64(local)
@@ -473,6 +502,32 @@ class _TrtCacheGcsSync:
                 logging.warning(
                     f"TRT cache upload of {name} to {self.prefix} failed: {e}"
                 )
+
+
+# Substrings ORT's TensorRT EP uses when a cached engine/timing file can't
+# be loaded (vs. a genuine build failure, which mentions neither). Matched
+# case-insensitively; a false positive only costs one extra build attempt.
+_TRT_CACHE_LOAD_ERROR_MARKERS = (
+    "deserialize engine from cache",
+    "engine cache",
+    "timing cache",
+)
+
+
+def _is_trt_cache_load_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _TRT_CACHE_LOAD_ERROR_MARKERS)
+
+
+def _clear_trt_cache_dir(path: str):
+    """Delete the files of one scope's cache dir (engines, profiles, timing)."""
+    for name in os.listdir(path):
+        target = os.path.join(path, name)
+        if os.path.isfile(target):
+            try:
+                os.remove(target)
+            except OSError as e:
+                logging.warning(f"Could not remove corrupt cache file {target}: {e}")
 
 
 def create_session(model_path: str, device: str, provider_options: dict | None = None):
@@ -505,9 +560,27 @@ def create_session(model_path: str, device: str, provider_options: dict | None =
             )
             trt_cache_sync.download()
 
-    session = ort.InferenceSession(
-        model_path, providers=providers, sess_options=session_options
-    )
+    try:
+        session = ort.InferenceSession(
+            model_path, providers=providers, sess_options=session_options
+        )
+    except Exception as e:
+        # A corrupt cached engine (torn write, bad byte on disk) fails the
+        # deserialize here — ORT never falls back to rebuilding on its own.
+        # Clear the scope's cache and retry once as a native build; the
+        # sweep below then replaces any corrupt GCS copy with the fresh
+        # engine. A second failure is a real error and propagates.
+        if trt_scope is None or not _is_trt_cache_load_error(e):
+            raise
+        cache_dir = providers[0][1]["trt_engine_cache_path"]
+        logging.warning(
+            f"TensorRT cache under {cache_dir} failed to load ({e}); "
+            "clearing it and rebuilding the engine natively."
+        )
+        _clear_trt_cache_dir(cache_dir)
+        session = ort.InferenceSession(
+            model_path, providers=providers, sess_options=session_options
+        )
 
     # With an explicit profile (mandatory for TRT) the engine builds during
     # session init, not first predict — push it now so even a worker that

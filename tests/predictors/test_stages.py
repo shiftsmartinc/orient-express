@@ -428,3 +428,65 @@ def test_predict_stream_rejects_invalid_prefetch(detector, bad_prefetch):
                 [make_images(1)], confidence=0.5, prefetch=bad_prefetch
             )
         )
+
+
+def _counting_infer(detector):
+    counter = {"n": 0}
+    real_infer = detector.infer
+
+    def infer(feed):
+        counter["n"] += 1
+        return real_infer(feed)
+
+    detector.infer = infer
+    return counter
+
+
+def _slow_postprocess(detector, seconds=0.02):
+    import time
+
+    real_postprocess = detector.postprocess
+
+    def postprocess(outputs, feed, **kwargs):
+        time.sleep(seconds)
+        return real_postprocess(outputs, feed, **kwargs)
+
+    detector.postprocess = postprocess
+
+
+def test_predict_stream_bounds_postprocess_queue(detector):
+    # postprocess slower than infer must apply backpressure to infer, not
+    # queue every batch's outputs and feed in memory (each queued
+    # postprocess future holds its whole batch)
+    _slow_postprocess(detector)
+    infered = _counting_infer(detector)
+    batches = [make_images(2) for _ in range(12)]
+    yielded = 0
+    max_gap = 0
+    for _ in detector.predict_stream(batches, confidence=0.5):
+        yielded += 1
+        max_gap = max(max_gap, infered["n"] - yielded)
+    assert yielded == 12
+    # post_cap is 2 x pool workers (= 4 at default prefetch) + slack for
+    # the batch in flight; without the bound this reaches ~11
+    assert max_gap <= 6
+
+
+def test_predict_stream_fused_bounds_postprocess_queue(detector):
+    class Loader:
+        def __init__(self, feeds):
+            self.feeds = feeds
+
+        def iter_feeds(self, predictor, prefetch=None):
+            yield from self.feeds
+
+    _slow_postprocess(detector)
+    infered = _counting_infer(detector)
+    feeds = [(i, detector.preprocess(make_images(2))) for i in range(12)]
+    yielded = 0
+    max_gap = 0
+    for _ in detector.predict_stream(Loader(feeds), confidence=0.5):
+        yielded += 1
+        max_gap = max(max_gap, infered["n"] - yielded)
+    assert yielded == 12
+    assert max_gap <= 6

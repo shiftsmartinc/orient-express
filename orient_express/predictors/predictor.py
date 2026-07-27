@@ -99,8 +99,9 @@ class Predictor(ABC):
 class ImagePredictor(Predictor):
     """Image predictor backed directly by an ONNX Runtime session.
 
-    ORT is the only backend: its TensorRT execution provider performs within
-    ~2% of native TensorRT.
+    ORT is the only backend: its TensorRT execution provider runs close
+    enough to native TensorRT that a second backend was not worth the
+    complexity.
 
     Inference is split into three public stages so callers can pipeline:
 
@@ -284,8 +285,8 @@ class ImagePredictor(Predictor):
         An ImageLoader source takes the fused fast path: each image is
         resized by the same worker that loaded it (via preprocess_item), so
         there is no separate preprocess pool and full-size images never
-        accumulate — measured ~25% faster than the generic path when loading
-        is CPU-bound, identical results.
+        accumulate — faster than the generic path when loading is CPU-bound,
+        identical results.
         """
         if prefetch is not None and not (isinstance(prefetch, int) and prefetch >= 1):
             raise ValueError(f"prefetch must be an int >= 1, got {prefetch!r}")
@@ -339,7 +340,17 @@ class ImagePredictor(Predictor):
                 return batch
             return no_payload, batch
 
-        with ThreadPoolExecutor(max_workers=max(2, prefetch)) as pool:
+        workers = max(2, prefetch)
+        # Postprocess results are drained opportunistically, so a postprocess
+        # stage slower than infer would otherwise queue without bound — and
+        # every queued future holds its whole batch's outputs and feed. Cap
+        # the queue and block (backpressure on infer) when it fills.
+        post_cap = 2 * workers
+        # try/finally instead of `with`: on early consumer exit, cancel the
+        # queued preprocess/postprocess futures instead of running them all
+        # before close() returns
+        pool = ThreadPoolExecutor(max_workers=workers)
+        try:
             pre: deque = deque()  # (payload, n_images, preprocess future)
             post: deque = deque()  # (payload, postprocess future)
             exhausted = False
@@ -364,9 +375,10 @@ class ImagePredictor(Predictor):
 
             top_up()
             while pre or post:
-                # yield due results without blocking the infer loop, unless
-                # there is nothing left to infer
-                while post and (post[0][1].done() or not pre):
+                # yield due results without blocking the infer loop — unless
+                # nothing is left to infer, or postprocess has fallen behind
+                # (queue at cap)
+                while post and (post[0][1].done() or not pre or len(post) >= post_cap):
                     payload, fut = post.popleft()
                     yield emit(payload, fut.result())
                 if pre:
@@ -383,13 +395,19 @@ class ImagePredictor(Predictor):
                             pool.submit(self.postprocess, outputs, feed, **kwargs),
                         )
                     )
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def _predict_stream_fused(self, loader, prefetch=None, **kwargs):
         """predict_stream fast path for ImageLoader: infer + threaded post."""
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        # try/finally instead of `with`: cancel queued postprocess futures
+        # on early consumer exit (see _pipeline)
+        pool = ThreadPoolExecutor(max_workers=2)
+        post_cap = 4  # same bounded-postprocess backpressure as _pipeline
+        try:
             post: deque = deque()
             for payload, feed in loader.iter_feeds(self, prefetch):
-                while post and post[0][1].done():
+                while post and (post[0][1].done() or len(post) >= post_cap):
                     done_payload, fut = post.popleft()
                     yield done_payload, fut.result()
                 outputs = self.infer(feed)
@@ -399,6 +417,8 @@ class ImagePredictor(Predictor):
             while post:
                 done_payload, fut = post.popleft()
                 yield done_payload, fut.result()
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def collate_sizes(self, pil_images: list[Image.Image]):
         sizes = [[img.size[1], img.size[0]] for img in pil_images]
@@ -412,9 +432,9 @@ class ImagePredictor(Predictor):
             batch[i] = cv2.resize(image_to_array(pil_images[i]), self.img_size)
 
         # cv2.resize releases the GIL, so batches of full-size photos collate
-        # ~3x faster on a thread pool; batches of small crops (e.g. from
-        # build_vector_index) stay serial — task dispatch would dominate their
-        # ~microsecond resizes. Calibrated empirically, see PR summary.
+        # several times faster on a thread pool; batches of small crops (e.g.
+        # from build_vector_index) stay serial — task dispatch would dominate
+        # their ~microsecond resizes. The threshold is calibrated empirically.
         total_input_pixels = sum(img.size[0] * img.size[1] for img in pil_images)
         if n >= 2 and total_input_pixels >= THREADED_COLLATE_MIN_TOTAL_PIXELS:
             with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:

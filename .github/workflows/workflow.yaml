@@ -45,8 +45,6 @@ jobs:
         include:
           - os: macos-latest
             extra: cpu
-          - os: windows-latest
-            extra: cpu
           - os: ubuntu-latest
             extra: tensorrt   # GPU wheels install + import without a GPU
     steps:
