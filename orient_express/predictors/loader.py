@@ -16,8 +16,7 @@ import logging
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from queue import Empty, Full, Queue
-from threading import Event, Lock, Thread
-from urllib.parse import quote
+from threading import Event, Thread
 
 
 def _log_load_error(item, exc):
@@ -214,9 +213,8 @@ class UrlImageLoader:
         for rows_batch, preds in predictor.predict_stream(loader, confidence=0.4):
             ...
 
-    gs:// URLs and storage.googleapis.com URLs are authenticated with
-    application-default credentials automatically; other URLs are fetched
-    as-is (pass `headers` for custom auth).
+    URLs are fetched exactly as given — no credentials are attached. Pass
+    `headers` when the endpoint needs auth.
 
     decode="exact" (default) is pixel-faithful to a full decode.
     decode="fast" decodes JPEGs at a reduced scale sized to the target
@@ -270,35 +268,6 @@ class UrlImageLoader:
         self.timeout = timeout
         self.retries = retries
         self.retry_backoff = retry_backoff
-        self._token = None
-        self._token_lock = Lock()
-
-    # ------------------------------------------------------------ auth
-
-    def _google_token(self) -> str:
-        import google.auth
-        from google.auth.transport.requests import Request as AuthRequest
-
-        with self._token_lock:
-            if self._token is None or not self._token[0].valid:
-                credentials, _ = google.auth.default()
-                credentials.refresh(AuthRequest())
-                self._token = (credentials,)
-            return self._token[0].token
-
-    def _resolve(self, item):
-        """Item -> (final URL, headers). gs:// becomes an authed media URL."""
-        url = self.url(item)
-        if url.startswith("gs://"):
-            bucket, _, path = url[5:].partition("/")
-            url = (
-                f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/"
-                f"{quote(path, safe='')}?alt=media"
-            )
-            return url, {"Authorization": f"Bearer {self._google_token()}"}
-        if url.startswith("https://storage.googleapis.com/"):
-            return url, {"Authorization": f"Bearer {self._google_token()}"}
-        return url, self.headers
 
     # ------------------------------------------------------------ fetch
 
@@ -326,7 +295,6 @@ class UrlImageLoader:
         async def main():
             import aiohttp
 
-            resolve_pool = ThreadPoolExecutor(max_workers=1)
             loop = asyncio.get_running_loop()
             connector = aiohttp.TCPConnector(limit=self.concurrency)
             client_timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -336,14 +304,12 @@ class UrlImageLoader:
             ) as session:
 
                 async def fetch(item):
-                    # _resolve may refresh an ADC token (blocking) — keep
-                    # it off the event loop
-                    url, headers = await loop.run_in_executor(
-                        resolve_pool, self._resolve, item
-                    )
+                    url = self.url(item)
                     for attempt in range(self.retries + 1):
                         try:
-                            async with session.get(url, headers=headers) as response:
+                            async with session.get(
+                                url, headers=self.headers
+                            ) as response:
                                 response.raise_for_status()
                                 return await response.read()
                         except Exception as e:  # noqa: BLE001 - filtered below
@@ -377,7 +343,6 @@ class UrlImageLoader:
                     top_up()
                 for _, task in pending:
                     task.cancel()
-            resolve_pool.shutdown(wait=False)
 
         def run():
             try:

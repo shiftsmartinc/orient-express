@@ -303,9 +303,9 @@ have URLs, or custom loading logic?
 standard case: photos in GCS). The loader owns downloading AND decoding:
 downloads run on an asyncio event loop (object-store latency means high
 throughput needs hundreds of requests in flight, which threads pay GIL
-tax to hold), decoding runs on cv2, which releases the GIL. `gs://` and
-`storage.googleapis.com` URLs authenticate via application-default
-credentials automatically.
+tax to hold), decoding runs on cv2, which releases the GIL. URLs are
+fetched exactly as given — no credentials are attached; pass `headers=`
+if the endpoint needs auth.
 
 ```python
 from orient_express.predictors import UrlImageLoader

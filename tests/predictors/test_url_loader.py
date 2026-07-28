@@ -32,7 +32,12 @@ def image_server():
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path.startswith("/flaky/"):
+            if self.path.startswith("/private/"):
+                if self.headers.get("Authorization") != "Bearer tok":
+                    self.send_error(401)
+                    return
+                body = flaky_body
+            elif self.path.startswith("/flaky/"):
                 # 503 on the first hit of each path, succeed after
                 flaky_hits[self.path] = flaky_hits.get(self.path, 0) + 1
                 if flaky_hits[self.path] == 1:
@@ -112,18 +117,28 @@ def test_url_callable_and_payload(image_server):
     assert seen == list(range(7))
 
 
-def test_gs_url_resolution():
-    loader = UrlImageLoader([], url=None)
-    with patch.object(loader, "_google_token", return_value="tok"):
-        url, headers = loader._resolve("gs://my-bucket/path/to/img 1.jpg")
-    assert url == (
-        "https://storage.googleapis.com/storage/v1/b/my-bucket/o/"
-        "path%2Fto%2Fimg%201.jpg?alt=media"
-    )
-    assert headers == {"Authorization": "Bearer tok"}
-    url, headers = loader._resolve("https://example.com/a.jpg")
-    assert url == "https://example.com/a.jpg"
-    assert headers == {}
+def test_non_url_items_error_per_item(image_server):
+    # a gs:// URI is not a URL; it fails naturally in the fetch and is
+    # reported like any other bad item, without special handling
+    refs = [f"{image_server}/img/0.jpg", "gs://bucket/img.jpg"]
+    failures = []
+    loader = UrlImageLoader(refs, on_error=lambda item, exc: failures.append(item))
+    seen = [item for payload, _ in loader for item in payload]
+    assert seen == [f"{image_server}/img/0.jpg"]
+    assert failures == ["gs://bucket/img.jpg"]
+
+
+def test_custom_headers_sent(image_server):
+    # `headers` is the auth mechanism: the /private/ path 401s without the
+    # right Authorization header
+    refs = [f"{image_server}/private/a.jpg"]
+    failures = []
+    loader = UrlImageLoader(refs, on_error=lambda item, exc: failures.append(item))
+    assert [item for payload, _ in loader for item in payload] == []
+    assert failures == refs  # unauthenticated: rejected
+
+    loader = UrlImageLoader(refs, headers={"Authorization": "Bearer tok"})
+    assert [item for payload, _ in loader for item in payload] == refs
 
 
 def test_fast_decode_requires_target_outside_predict_stream(image_server):
