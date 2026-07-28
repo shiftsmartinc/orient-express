@@ -16,12 +16,9 @@ jobs:
       with:
         enable-cache: true
     - name: Install dependencies
-      # onnxruntime-gpu (selected by platform marker on linux-x86_64) needs
-      # CUDA libs at import since 1.27; runners have none, so install the
-      # CPU wheel instead — same swap the serving Dockerfiles do.
-      run: |
-        uv sync --frozen --no-install-package onnxruntime-gpu
-        uv pip install "onnxruntime>=1.20,<2"
+      # the cpu extra selects the lock-pinned CPU onnxruntime; GPU wheels
+      # live in the cuda/tensorrt extras and never install here
+      run: uv sync --frozen --extra cpu
     - name: Lint with ruff
       run: uv run --no-sync ruff check .
     - name: Check formatting with ruff
@@ -35,6 +32,34 @@ jobs:
       with:
         name: python-package-distributions
         path: dist/
+
+  install-matrix:
+    # cross-platform packaging: catches extras-marker/wheel-availability
+    # regressions at install/import time, which is where they actually break
+    # (GPU behavior itself can't be tested on hosted runners)
+    name: Install (${{ matrix.os }}, ${{ matrix.extra }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            extra: cpu
+          - os: ubuntu-latest
+            extra: tensorrt   # GPU wheels install + import without a GPU
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+    - name: Install dependencies
+      run: uv sync --frozen --extra ${{ matrix.extra }}
+    - name: Import and list providers
+      run: uv run --no-sync python -c "from orient_express.predictors import runtime; print(runtime.ort.__version__, runtime.ort.get_available_providers())"
+    - name: Run tests
+      if: matrix.extra == 'cpu'
+      run: uv run --no-sync pytest -q --ignore=tests/equivalence
 
   publish-to-pypi:
     name: Publish to PyPI

@@ -1,4 +1,4 @@
-"""Tests for OnnxSessionWrapper.collate_images (preallocated + threaded)."""
+"""Tests for ImagePredictor.collate_images (preallocated + threaded)."""
 
 from unittest.mock import MagicMock, patch
 
@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from orient_express.predictors import predictor as predictor_module
-from orient_express.predictors.predictor import OnnxSessionWrapper
+from orient_express.predictors.predictor import ImagePredictor
 from orient_express.utils.image_processor import image_to_array
 
 
@@ -16,10 +16,10 @@ def make_wrapper(resolution=64):
     session.get_inputs.return_value = [MagicMock(shape=[1, resolution, resolution, 3])]
     session.get_outputs.return_value = []
     with patch(
-        "orient_express.predictors.predictor.ort.InferenceSession",
+        "orient_express.predictors.runtime.ort.InferenceSession",
         return_value=session,
     ):
-        return OnnxSessionWrapper("fake.onnx")
+        return ImagePredictor("fake.onnx")
 
 
 def reference_collate(wrapper, pil_images):

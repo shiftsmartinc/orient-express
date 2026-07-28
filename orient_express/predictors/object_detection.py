@@ -5,7 +5,7 @@ import numpy as np
 from PIL import Image
 
 from ..utils.image_processor import opencv_to_pil, pil_to_opencv
-from .predictor import ImagePredictor, OnnxSessionWrapper
+from .predictor import ImagePredictor
 
 
 def nms(boxes: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np.ndarray:
@@ -43,52 +43,8 @@ class BoundingBoxPrediction:
         }
 
 
-class OnnxDetector(OnnxSessionWrapper):
-    def __call__(self, pil_images: list[Image.Image], confidence: float = 0.5):
-        images_array = self.collate_images(pil_images)
-        target_sizes_array = self.collate_sizes(pil_images)
-
-        input_dict = {
-            self.input_names[0]: images_array,
-            self.input_names[1]: target_sizes_array,
-        }
-
-        boxes, scores, labels = self.session.run(None, input_dict)
-        return self.postprocess(boxes, scores, labels, confidence)
-
-    def postprocess(
-        self,
-        boxes: np.ndarray,
-        scores: np.ndarray,
-        labels: np.ndarray,
-        confidence: float,
-    ):
-        results: list[np.ndarray] = []
-        batch_size = boxes.shape[0]
-
-        for i in range(batch_size):
-            valid_mask = scores[i] > confidence
-
-            filtered_boxes = boxes[i][valid_mask]
-            filtered_scores = scores[i][valid_mask]
-            filtered_labels = labels[i][valid_mask]
-
-            result = np.column_stack(
-                [
-                    filtered_boxes,
-                    filtered_scores.reshape(-1, 1),
-                    filtered_labels.reshape(-1, 1),
-                ]
-            )
-
-            results.append(result)
-
-        return results
-
-
 class BoundingBoxPredictor(ImagePredictor):
     model_type = "object-detection-onnx"
-    backend_model = OnnxDetector
 
     def predict(
         self,
@@ -98,16 +54,46 @@ class BoundingBoxPredictor(ImagePredictor):
     ) -> list[list[BoundingBoxPrediction]]:
         if not images:
             return []
-        raw_outputs = self.model(images, confidence)
-        if nms_threshold is not None:
-            nms_outputs = []
-            for boxes in raw_outputs:
-                nms_outputs.append(self.apply_nms(boxes, nms_threshold))
-            raw_outputs = nms_outputs
-        outputs = []
-        for boxes in raw_outputs:
-            outputs.append(self.format_output(boxes))
-        return outputs
+        feed = self.preprocess(images)
+        outputs = self.infer(feed)
+        return self.postprocess(
+            outputs, feed, confidence=confidence, nms_threshold=nms_threshold
+        )
+
+    def preprocess(self, images: list[Image.Image]):
+        return {
+            self.input_names[0]: self.collate_images(images),
+            self.input_names[1]: self.collate_sizes(images),
+        }
+
+    def assemble_feed(self, arrays, sizes):
+        return {
+            self.input_names[0]: np.stack(arrays),
+            self.input_names[1]: np.array(sizes, dtype=np.float32),
+        }
+
+    def postprocess(
+        self,
+        outputs,
+        feed,
+        confidence: float,
+        nms_threshold: float | None = None,
+    ) -> list[list[BoundingBoxPrediction]]:
+        boxes, scores, labels = outputs
+        results = []
+        for i in range(boxes.shape[0]):
+            valid_mask = scores[i] > confidence
+            result = np.column_stack(
+                [
+                    boxes[i][valid_mask],
+                    scores[i][valid_mask].reshape(-1, 1),
+                    labels[i][valid_mask].reshape(-1, 1),
+                ]
+            )
+            if nms_threshold is not None:
+                result = self.apply_nms(result, nms_threshold)
+            results.append(self.format_output(result))
+        return results
 
     def apply_nms(self, boxes: np.ndarray, iou_threshold: float):
         if not len(boxes):

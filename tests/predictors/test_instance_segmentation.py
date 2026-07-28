@@ -12,7 +12,7 @@ from orient_express.predictors.instance_segmentation import (
 
 
 class TestInstanceSegmentationPredictor:
-    """Tests for InstanceSegmentationPredictor and OnnxInstanceSegmentation."""
+    """Tests for InstanceSegmentationPredictor."""
 
     @pytest.fixture
     def mock_segmentation_session(self, mock_onnx_session):
@@ -26,7 +26,7 @@ class TestInstanceSegmentationPredictor:
     def test_empty_input(self, mock_segmentation_session, class_mapping):
         """Predict with empty list returns empty list."""
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_segmentation_session,
         ):
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
@@ -46,7 +46,7 @@ class TestInstanceSegmentationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_segmentation_session,
         ):
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
@@ -74,7 +74,7 @@ class TestInstanceSegmentationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_segmentation_session,
         ):
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
@@ -115,7 +115,7 @@ class TestInstanceSegmentationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_segmentation_session,
         ):
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
@@ -139,7 +139,7 @@ class TestInstanceSegmentationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_segmentation_session,
         ):
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
@@ -164,7 +164,7 @@ class TestInstanceSegmentationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_segmentation_session,
         ):
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
@@ -184,7 +184,7 @@ class TestInstanceSegmentationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_segmentation_session,
         ):
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)
@@ -217,7 +217,7 @@ class TestInstanceSegmentationPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_segmentation_session,
         ):
             predictor = InstanceSegmentationPredictor("fake.onnx", class_mapping)

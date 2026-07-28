@@ -101,11 +101,9 @@ class VertexModel:
         predictions = self.endpoint.predict(instances=instances, parameters=parameters)
         return predictions.predictions
 
-    @overload
-    def get_local_predictor(
-        self, device: str = "cpu", force_download: bool = False
-    ) -> Any: ...
-
+    # the expected_type overload comes first: checkers match overloads in
+    # order, and the general **kwargs overload would swallow expected_type=
+    # calls and erase the narrowed return type
     @overload
     def get_local_predictor(
         self,
@@ -113,7 +111,13 @@ class VertexModel:
         force_download: bool = False,
         *,
         expected_type: type[T],
+        **kwargs: Any,
     ) -> T: ...
+
+    @overload
+    def get_local_predictor(
+        self, device: str = "cpu", force_download: bool = False, **kwargs: Any
+    ) -> Any: ...
 
     def get_local_predictor(
         self,
@@ -121,6 +125,7 @@ class VertexModel:
         force_download: bool = False,
         *,
         expected_type: type[T] | None = None,
+        **kwargs: Any,
     ) -> Any:
         """Download this model's artifacts (cached) and load a local predictor.
 
@@ -130,6 +135,9 @@ class VertexModel:
             predictor = vertex_model.get_local_predictor(
                 expected_type=BoundingBoxPredictor
             )
+
+        Extra keyword arguments are forwarded to the predictor constructor
+        (e.g. provider_options).
         """
         # Deferred: pulls onnxruntime/cv2, which vertex-only users never need
         from .predictors import get_predictor
@@ -137,8 +145,8 @@ class VertexModel:
         dir = os.path.join(ARTIFACT_DIR, self.model_name + "-" + str(self.version))
         self.download_artifacts(dir, force_download=force_download)
         if expected_type is None:
-            return get_predictor(dir, device)
-        return get_predictor(dir, device, expected_type=expected_type)
+            return get_predictor(dir, device, **kwargs)
+        return get_predictor(dir, device, expected_type=expected_type, **kwargs)
 
     def download_artifacts(self, dir: str, force_download: bool = True):
         download_artifacts(
@@ -200,7 +208,9 @@ def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True)
             relative_path = blob.name.split("/")[-1]
         if not relative_path:  # directory placeholder object
             continue
-        download_path = os.path.join(dir, relative_path)
+        # blob names are always '/'-separated; split so nested paths get
+        # native separators instead of a mixed 'dir\\sub/file' on Windows
+        download_path = os.path.join(dir, *relative_path.split("/"))
         if not force_download and os.path.exists(download_path):
             continue
         os.makedirs(os.path.dirname(download_path), exist_ok=True)

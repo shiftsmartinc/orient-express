@@ -12,7 +12,7 @@ from orient_express.predictors.object_detection import (
 
 
 class TestBoundingBoxPredictor:
-    """Tests for BoundingBoxPredictor and OnnxDetector."""
+    """Tests for BoundingBoxPredictor."""
 
     @pytest.fixture
     def mock_detector_session(self, mock_onnx_session):
@@ -26,7 +26,7 @@ class TestBoundingBoxPredictor:
     def test_empty_input(self, mock_detector_session, class_mapping):
         """Predict with empty list returns empty list."""
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -45,7 +45,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -72,7 +72,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -103,7 +103,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -131,7 +131,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -155,7 +155,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -175,7 +175,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -195,7 +195,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -224,7 +224,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)
@@ -255,7 +255,7 @@ class TestBoundingBoxPredictor:
         ]
 
         with patch(
-            "orient_express.predictors.predictor.ort.InferenceSession",
+            "orient_express.predictors.runtime.ort.InferenceSession",
             return_value=mock_detector_session,
         ):
             predictor = BoundingBoxPredictor("fake.onnx", class_mapping)

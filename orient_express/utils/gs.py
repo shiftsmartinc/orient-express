@@ -43,7 +43,13 @@ def exists(gs_url):
 
 
 def upload_file(
-    file_path, gs_url, read_mode="rb", content_type="application/octet-stream"
+    file_path,
+    gs_url,
+    read_mode="rb",
+    content_type="application/octet-stream",
+    timeout=60,
+    retry=None,
+    chunk_size=32 * 1024 * 1024,
 ):
     """Upload file to Google Cloud Storage.
 
@@ -52,16 +58,26 @@ def upload_file(
         gs_url (str): Google Cloud Storage URL where the file should be uploaded
         read_mode (str): Mode used to open the local file for reading
         content_type (str): MIME type of the file being uploaded
+        timeout (float): Per-request timeout in seconds (the library default)
+        retry: Retry policy override; None uses the default policy (which
+            retries for up to 120s — pass a bounded policy to cap the stall)
+        chunk_size (int): Upload in chunks of this many bytes (multiple of
+            256KB). Chunked by default: a single-request upload shares one
+            `timeout` deadline for the whole body, so any file slower than
+            that (e.g. a 120MB model on a slow uplink) would never succeed.
     """
     bucket_name, gs_file_path = parse_gcs_url(gs_url)
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(gs_file_path)
+    blob = bucket.blob(gs_file_path, chunk_size=chunk_size)
 
     # Open file in read binary mode for uploading
     with open(file_path, read_mode) as file_obj:
         blob.upload_from_file(
-            file_obj, content_type=content_type, retry=get_default_retry_policy()
+            file_obj,
+            content_type=content_type,
+            retry=retry if retry is not None else get_default_retry_policy(),
+            timeout=timeout,
         )
 
     logging.info(f"File uploaded to {gs_url}")
