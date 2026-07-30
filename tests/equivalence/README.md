@@ -29,7 +29,7 @@ publish or attach it anywhere public.
 | `ORIENT_EXPRESS_TEST_DOCKER_IMAGE` | for serving tests | image tag to boot (usually built locally from your branch). |
 | `GOOGLE_CLOUD_PROJECT` | for serving tests | passed into the container so its GCS client can resolve a project (production Vertex provides this itself). |
 | `ORIENT_EXPRESS_TEST_GOLDENS_DIR` | no | local goldens dir instead of GCS — for evaluating **candidate** goldens before uploading. |
-| `ORIENT_EXPRESS_TEST_DEVICE` | no | device for predictor-level cases (`cpu` default; `cuda`, `tensorrt`, `tensorrt-fp16`). Goldens were generated on CPU, so GPU runs measure device drift against the same goldens. |
+| `ORIENT_EXPRESS_TEST_DEVICE` | no | device for predictor-level cases (`cpu` default; `cuda`, `tensorrt`, `tensorrt-fp16`, `tensorrt-bf16`). Goldens were generated on CPU, so GPU runs measure device drift against the same goldens — set `device_tolerances` in the manifest for reduced-precision devices. |
 | `ORIENT_EXPRESS_TEST_REPORT` | no | report output path (default `test-output/equivalence_report.html`). |
 | `ORIENT_EXPRESS_TEST_CACHE` | no | asset cache dir (default `~/.cache/orient-express-test-assets`). |
 
@@ -120,6 +120,14 @@ Defaults live in `harness.DEFAULT_TOLERANCES`; the manifest can override per
 case, with comments documenting why. Class/argmax equality is always strict.
 Detection lists are matched order-independently (class + IoU): near-tied
 scores legitimately swap TopK order across onnxruntime versions.
+
+Reduced-precision devices (`tensorrt-fp16`, `tensorrt-bf16`) drift from the
+CPU-generated goldens by design; `device_tolerances` in the manifest (and per
+case) gives each device its own tolerance tier so a GPU run tests "drift is
+bounded" rather than failing on expected precision loss. Layering, later
+wins: defaults < manifest `default_tolerances` < manifest
+`device_tolerances[device]` < case `tolerances` < case
+`device_tolerances[device]`. The report records which device produced it.
 
 ## Manifest
 

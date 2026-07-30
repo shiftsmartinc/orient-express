@@ -15,7 +15,7 @@ from PIL import Image
 from ..utils.colors import generate_color_scheme
 from ..utils.image_processor import image_to_array, image_to_base64
 from ..utils.paths import get_metadata_path
-from .runtime import Device, create_session, parse_trt_profile_shapes
+from .runtime import _TRT_DEVICES, Device, create_session, parse_trt_profile_shapes
 
 IMAGE_ONNX_IMAGE_REPO = (
     "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx"
@@ -124,7 +124,7 @@ class ImagePredictor(Predictor):
         provider_options: dict | None = None,
     ):
         self._trt_profile_bounds = None
-        if device in (Device.TENSORRT, Device.TENSORRT_FP16) and provider_options:
+        if device in _TRT_DEVICES and provider_options:
             # Validate profile syntax before the session is created: ORT
             # ignores a malformed spec with only a log warning and profiles
             # the first shape it sees instead of the intended range — and a

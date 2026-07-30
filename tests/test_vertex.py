@@ -1161,6 +1161,83 @@ class TestUploadModel:
             }
 
 
+class TestUploadTimeout:
+    """upload_timeout must reach every GCS request.
+
+    Slow uplinks die on google's 60s-per-request / 120s-retry defaults.
+    """
+
+    def _run_upload(self, mock_client, mock_predictor, upload_timeout=None):
+        with (
+            patch("orient_express.vertex.storage.Client", return_value=mock_client),
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+        ):
+            mock_model_class.list.return_value = []
+            mock_model_class.upload.return_value = MagicMock(name="new", version_id="1")
+            upload_model(
+                model=mock_predictor,
+                model_name="test",
+                project_name="test-project",
+                region="us-central1",
+                bucket_name="test-bucket",
+                upload_timeout=upload_timeout,
+            )
+
+    def test_default_timeout_on_every_request(
+        self, mock_storage_client, mock_predictor
+    ):
+        mock_client, mock_bucket = mock_storage_client
+        blob = MagicMock()
+        mock_bucket.blob.return_value = blob
+        self._run_upload(mock_client, mock_predictor)
+        assert blob.upload_from_filename.called
+        for call in blob.upload_from_filename.call_args_list:
+            assert (
+                call.kwargs["timeout"] == vertex_module.DEFAULT_UPLOAD_TIMEOUT_SECONDS
+            )
+            assert call.kwargs["retry"] is not None
+
+    def test_explicit_timeout_wins(self, mock_storage_client, mock_predictor):
+        mock_client, mock_bucket = mock_storage_client
+        blob = MagicMock()
+        mock_bucket.blob.return_value = blob
+        self._run_upload(mock_client, mock_predictor, upload_timeout=7.0)
+        for call in blob.upload_from_filename.call_args_list:
+            assert call.kwargs["timeout"] == 7.0
+
+    def test_env_var_overrides_default(
+        self, mock_storage_client, mock_predictor, monkeypatch
+    ):
+        monkeypatch.setenv("ORIENT_EXPRESS_UPLOAD_TIMEOUT", "45")
+        mock_client, mock_bucket = mock_storage_client
+        blob = MagicMock()
+        mock_bucket.blob.return_value = blob
+        self._run_upload(mock_client, mock_predictor)
+        for call in blob.upload_from_filename.call_args_list:
+            assert call.kwargs["timeout"] == 45.0
+
+    def test_chunked_path_gets_timeout(
+        self, mock_storage_client, mock_predictor, monkeypatch
+    ):
+        # force every file over the chunking threshold so the transfer
+        # manager path (the one that actually dies on slow uplinks) is taken
+        monkeypatch.setattr(vertex_module, "CHUNKED_TRANSFER_THRESHOLD_BYTES", 0)
+        mock_client, mock_bucket = mock_storage_client
+        mock_bucket.blob.return_value = MagicMock()
+        with patch(
+            "orient_express.vertex.transfer_manager.upload_chunks_concurrently"
+        ) as chunked:
+            self._run_upload(mock_client, mock_predictor, upload_timeout=300.0)
+        assert chunked.called
+        for call in chunked.call_args_list:
+            assert call.kwargs["timeout"] == 300.0
+            # the retry policy's total-time budget scales with the request
+            # timeout — DEFAULT_RETRY's fixed 120s window is what aborted
+            # slow-but-progressing uploads
+            assert call.kwargs["retry"]._timeout == 600.0
+
+
 class TestUploadModelJoblib:
     """Tests for the upload_model_joblib function."""
 

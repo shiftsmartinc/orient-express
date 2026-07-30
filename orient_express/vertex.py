@@ -10,6 +10,7 @@ import joblib
 import yaml
 from google.cloud import aiplatform, storage
 from google.cloud.storage import transfer_manager
+from google.cloud.storage.retry import DEFAULT_RETRY
 
 from .utils.paths import get_cache_dir
 
@@ -25,6 +26,22 @@ _last_vertex_init: tuple[str, str] | None = None
 # artifact (~120 MB) is otherwise bottlenecked on a single stream.
 CHUNKED_TRANSFER_THRESHOLD_BYTES = 8 * 1024 * 1024
 TRANSFER_MAX_WORKERS = 8
+
+# Per-HTTP-request timeout for model uploads, seconds. One request carries
+# up to one 32MB chunk, and the workers above share the uplink, so on a slow
+# connection each request legitimately takes minutes — google's 60s default
+# (retried for at most 120s) aborts uploads that would have finished.
+# Override per call (upload_timeout=...) or process-wide via the
+# ORIENT_EXPRESS_UPLOAD_TIMEOUT environment variable.
+DEFAULT_UPLOAD_TIMEOUT_SECONDS = 600.0
+
+
+def _upload_timeout(timeout: float | None) -> float:
+    if timeout is not None:
+        return timeout
+    return float(
+        os.environ.get("ORIENT_EXPRESS_UPLOAD_TIMEOUT", DEFAULT_UPLOAD_TIMEOUT_SECONDS)
+    )
 
 
 class VertexModel:
@@ -181,7 +198,12 @@ def _download_blob(blob, download_path: str):
         blob.download_to_filename(download_path)
 
 
-def _upload_file(bucket, file_path: str, blob_name: str):
+def _upload_file(bucket, file_path: str, blob_name: str, timeout: float):
+    # The retry policy's total-time budget must scale with the request
+    # timeout: DEFAULT_RETRY gives up after 120s, so with a generous
+    # per-request timeout a single transient failure late in a slow chunk
+    # would kill the upload without ever retrying.
+    retry = DEFAULT_RETRY.with_timeout(max(timeout * 2, 120.0))
     blob = bucket.blob(blob_name)
     if os.path.getsize(file_path) > CHUNKED_TRANSFER_THRESHOLD_BYTES:
         transfer_manager.upload_chunks_concurrently(
@@ -189,9 +211,11 @@ def _upload_file(bucket, file_path: str, blob_name: str):
             blob,
             worker_type=transfer_manager.THREAD,
             max_workers=TRANSFER_MAX_WORKERS,
+            timeout=timeout,
+            retry=retry,
         )
     else:
-        blob.upload_from_filename(file_path)
+        blob.upload_from_filename(file_path, timeout=timeout, retry=retry)
 
 
 def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True):
@@ -233,6 +257,7 @@ def upload_model(
     serving_container_health_route: str = "",
     serving_container_predict_route: str = "",
     labels: dict[str, str] | None = None,
+    upload_timeout: float | None = None,
 ):
     """Upload a Predictor model to Vertex AI Model Registry.
 
@@ -246,6 +271,10 @@ def upload_model(
         serving_container_health_route: Health check endpoint route
         serving_container_predict_route: Prediction endpoint route
         labels: Optional labels to attach to the model
+        upload_timeout: Per-HTTP-request timeout in seconds for the artifact
+            transfer (each request carries up to one 32MB chunk). Default
+            DEFAULT_UPLOAD_TIMEOUT_SECONDS, overridable process-wide via
+            ORIENT_EXPRESS_UPLOAD_TIMEOUT; raise it on slow connections.
 
     Returns:
         VertexModel instance
@@ -272,6 +301,7 @@ def upload_model(
             serving_container_health_route,
             serving_container_predict_route,
             labels,
+            upload_timeout,
         )
     return vertex_model
 
@@ -286,6 +316,7 @@ def upload_model_joblib(
     serving_container_health_route: str,
     serving_container_predict_route: str,
     labels: dict[str, str] | None = None,
+    upload_timeout: float | None = None,
 ):
     """Upload a joblib-serializable model to Vertex AI Model Registry.
 
@@ -303,6 +334,8 @@ def upload_model_joblib(
         serving_container_health_route: Health check endpoint route
         serving_container_predict_route: Prediction endpoint route
         labels: Optional labels to attach to the model
+        upload_timeout: Per-HTTP-request timeout in seconds for the artifact
+            transfer (see upload_model)
 
     Returns:
         VertexModel instance
@@ -332,6 +365,7 @@ def upload_model_joblib(
             serving_container_health_route,
             serving_container_predict_route,
             labels,
+            upload_timeout,
         )
     return vertex_model
 
@@ -346,6 +380,7 @@ def upload_model_with_files(
     serving_container_health_route: str,
     serving_container_predict_route: str,
     labels: dict[str, str] | None = None,
+    upload_timeout: float | None = None,
 ) -> VertexModel:
     parent_model = get_vertex_model(
         model_name, project_name, region, raise_exception=False
@@ -358,6 +393,7 @@ def upload_model_with_files(
     client = storage.Client()
     bucket = client.bucket(bucket_name)
 
+    timeout = _upload_timeout(upload_timeout)
     artifact_dir = f"models/{model_name}/{version}/"
     with ThreadPoolExecutor(max_workers=TRANSFER_MAX_WORKERS) as pool:
         futures = [
@@ -366,6 +402,7 @@ def upload_model_with_files(
                 bucket,
                 file_name,
                 f"{artifact_dir}{os.path.basename(file_name)}",
+                timeout,
             )
             for file_name in file_list
         ]
