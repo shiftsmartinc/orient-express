@@ -1206,16 +1206,12 @@ class TestUploadTimeout:
         for call in blob.upload_from_filename.call_args_list:
             assert call.kwargs["timeout"] == 7.0
 
-    def test_env_var_overrides_default(
-        self, mock_storage_client, mock_predictor, monkeypatch
-    ):
-        monkeypatch.setenv("ORIENT_EXPRESS_UPLOAD_TIMEOUT", "45")
+    @pytest.mark.parametrize("bad", [0, -1, float("inf"), float("nan")])
+    def test_invalid_timeout_rejected(self, mock_storage_client, mock_predictor, bad):
         mock_client, mock_bucket = mock_storage_client
-        blob = MagicMock()
-        mock_bucket.blob.return_value = blob
-        self._run_upload(mock_client, mock_predictor)
-        for call in blob.upload_from_filename.call_args_list:
-            assert call.kwargs["timeout"] == 45.0
+        mock_bucket.blob.return_value = MagicMock()
+        with pytest.raises(ValueError, match="upload_timeout"):
+            self._run_upload(mock_client, mock_predictor, upload_timeout=bad)
 
     def test_chunked_path_gets_timeout(
         self, mock_storage_client, mock_predictor, monkeypatch

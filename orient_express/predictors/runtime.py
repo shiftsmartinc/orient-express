@@ -83,6 +83,9 @@ _TRT_PRECISION = {
     Device.TENSORRT_BF16: "bf16",
 }
 
+# Provider options reserved for device selection (see _build_providers).
+_PRECISION_OPTIONS = frozenset({"trt_fp16_enable", "trt_bf16_enable"})
+
 
 def parse_trt_profile_shapes(spec: str) -> dict[str, list[int]]:
     """Parse ORT's TRT profile syntax: 'images:1x576x576x3,target_sizes:1x2'."""
@@ -353,6 +356,19 @@ def _build_providers(
                 "additionally require entries for internal partition inputs — "
                 "it names them in its session-init error."
             )
+        # Engine precision is chosen by the device string, never by provider
+        # options: a device named one precision quietly building another (or
+        # a mixed fp16+bf16 engine) is exactly the ambiguity the dedicated
+        # devices exist to remove. Reject rather than silently override so
+        # the caller's mistaken intent surfaces.
+        conflicting = _PRECISION_OPTIONS & set(provider_options or {})
+        if conflicting:
+            raise ValueError(
+                f"provider_options may not set {', '.join(sorted(conflicting))}: "
+                "engine precision is selected by the device string — use "
+                f"device='{Device.TENSORRT}' (fp32), '{Device.TENSORRT_FP16}' "
+                f"or '{Device.TENSORRT_BF16}' instead."
+            )
         _preload_gpu_dlls()
         _preload_tensorrt_libs()
         cache = trt_engine_cache_dir(trt_scope)
@@ -371,7 +387,7 @@ def _build_providers(
             # activations and NaN under fp16). Set only for this device: ORT
             # builds predating the option reject unknown provider keys, and
             # fp32/fp16 users should not pay that compatibility cost.
-            options.setdefault("trt_bf16_enable", True)
+            options["trt_bf16_enable"] = True
         return [
             ("TensorrtExecutionProvider", options),
             "CUDAExecutionProvider",

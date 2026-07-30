@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import tempfile
 import warnings
@@ -31,17 +32,21 @@ TRANSFER_MAX_WORKERS = 8
 # up to one 32MB chunk, and the workers above share the uplink, so on a slow
 # connection each request legitimately takes minutes — google's 60s default
 # (retried for at most 120s) aborts uploads that would have finished.
-# Override per call (upload_timeout=...) or process-wide via the
-# ORIENT_EXPRESS_UPLOAD_TIMEOUT environment variable.
+# Override per call with upload_timeout=...
 DEFAULT_UPLOAD_TIMEOUT_SECONDS = 600.0
 
 
-def _upload_timeout(timeout: float | None) -> float:
-    if timeout is not None:
-        return timeout
-    return float(
-        os.environ.get("ORIENT_EXPRESS_UPLOAD_TIMEOUT", DEFAULT_UPLOAD_TIMEOUT_SECONDS)
-    )
+def _resolve_upload_timeout(timeout: float | None) -> float:
+    if timeout is None:
+        return DEFAULT_UPLOAD_TIMEOUT_SECONDS
+    # 0/negative/inf/nan would otherwise reach the GCS client and fail in
+    # confusing ways (or never time out at all)
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError(
+            f"upload_timeout must be a positive finite number of seconds, "
+            f"got {timeout!r}"
+        )
+    return float(timeout)
 
 
 class VertexModel:
@@ -273,8 +278,7 @@ def upload_model(
         labels: Optional labels to attach to the model
         upload_timeout: Per-HTTP-request timeout in seconds for the artifact
             transfer (each request carries up to one 32MB chunk). Default
-            DEFAULT_UPLOAD_TIMEOUT_SECONDS, overridable process-wide via
-            ORIENT_EXPRESS_UPLOAD_TIMEOUT; raise it on slow connections.
+            DEFAULT_UPLOAD_TIMEOUT_SECONDS; raise it on slow connections.
 
     Returns:
         VertexModel instance
@@ -393,7 +397,7 @@ def upload_model_with_files(
     client = storage.Client()
     bucket = client.bucket(bucket_name)
 
-    timeout = _upload_timeout(upload_timeout)
+    timeout = _resolve_upload_timeout(upload_timeout)
     artifact_dir = f"models/{model_name}/{version}/"
     with ThreadPoolExecutor(max_workers=TRANSFER_MAX_WORKERS) as pool:
         futures = [

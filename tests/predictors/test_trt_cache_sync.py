@@ -4,6 +4,8 @@ import time
 from threading import Event
 from unittest.mock import ANY, MagicMock, patch
 
+import pytest
+
 from orient_express.predictors.runtime import _TrtCacheGcsSync
 
 SCOPE = "abc123-ort1.27.0-trt10.16/fp32"  # what create_session appends
@@ -240,6 +242,13 @@ def test_bf16_device_builds_bf16_engine_options(tmp_path, monkeypatch):
             plain_scope = runtime.trt_cache_scope(str(model), _TEST_PROFILE, precision)
             _, plain = runtime._build_providers(device, _TEST_PROFILE, plain_scope)[0]
             assert "trt_bf16_enable" not in plain
+        # precision is selected by the device string only — caller-passed
+        # precision flags are rejected, never silently merged or overridden
+        for device in ("tensorrt", "tensorrt-fp16", "tensorrt-bf16"):
+            for flag in ("trt_fp16_enable", "trt_bf16_enable"):
+                conflicted = {**_TEST_PROFILE, flag: True}
+                with pytest.raises(ValueError, match="device string"):
+                    runtime._build_providers(device, conflicted, scope)
 
 
 def test_cache_gc_evicts_lru_scopes(tmp_path, monkeypatch):
