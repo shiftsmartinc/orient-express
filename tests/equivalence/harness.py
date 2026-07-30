@@ -75,10 +75,26 @@ def load_manifest() -> dict:
     return manifest
 
 
+def active_device() -> str:
+    return os.environ.get(DEVICE_ENV, "cpu")
+
+
 def case_tolerances(manifest: dict, case_cfg: dict) -> dict:
+    """Effective tolerances for a case on the active device.
+
+    Goldens are generated on CPU, so a run on any other device measures
+    device drift — and reduced-precision devices (tensorrt-fp16,
+    tensorrt-bf16) drift by design. `device_tolerances` (manifest-wide and
+    per-case) gives each device its own tolerance tier. Later layers win:
+    defaults < manifest default_tolerances < manifest device_tolerances
+    < case tolerances < case device_tolerances.
+    """
+    device = active_device()
     tolerances = dict(DEFAULT_TOLERANCES)
     tolerances.update(manifest.get("default_tolerances", {}))
+    tolerances.update(manifest.get("device_tolerances", {}).get(device, {}))
     tolerances.update(case_cfg.get("tolerances", {}))
+    tolerances.update(case_cfg.get("device_tolerances", {}).get(device, {}))
     return tolerances
 
 
@@ -170,7 +186,7 @@ def load_case_images(case_dir: str) -> dict[str, Image.Image]:
 def load_case_predictor(case_dir: str):
     from orient_express.predictors import get_predictor
 
-    device = os.environ.get(DEVICE_ENV, "cpu")
+    device = active_device()
     model_dir = os.path.join(case_dir, "model")
     if device.startswith("tensorrt"):
         return get_predictor(
@@ -634,6 +650,7 @@ def provenance() -> dict:
         "git_commit": commit,
         "platform": platform.platform(),
         "python": platform.python_version(),
+        "device": active_device(),
     }
 
 

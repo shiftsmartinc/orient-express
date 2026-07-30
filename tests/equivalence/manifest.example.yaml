@@ -18,6 +18,22 @@ default_tolerances:
   cosine_min: 0.9999      # embeddings
   class_scores_atol: 1.0e-3
 
+# Per-device tolerance tiers, keyed by ORIENT_EXPRESS_TEST_DEVICE. Goldens
+# are CPU-generated, so reduced-precision devices drift by design; these
+# bound that drift instead of failing on it. Cases may also carry their own
+# device_tolerances (later wins: defaults < default_tolerances <
+# device_tolerances[device] < case tolerances < case device_tolerances).
+device_tolerances:
+  tensorrt-fp16:
+    score_atol: 2.0e-2
+    bbox_atol: 2.0
+    class_scores_atol: 2.0e-2
+  tensorrt-bf16:
+    score_atol: 5.0e-2    # bf16 has fp32 range but a coarser mantissa
+    bbox_atol: 2.0
+    class_scores_atol: 5.0e-2
+    pixel_mismatch_max: 0.1  # dense masks churn at class boundaries
+
 cases:
   example-detection:
     docker: true

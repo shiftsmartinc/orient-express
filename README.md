@@ -209,6 +209,14 @@ predictor = BoundingBoxPredictor(
     "/path/to/model", classes, device="tensorrt-fp16", provider_options=PROFILE
 )
 
+# "tensorrt-bf16": near-fp16 speed with fp32's dynamic range. The 16-bit
+# mode for models whose activations overflow fp16's 65504 max — e.g.
+# DINOv3-backbone models, which carry ~1.5e5 residual activations and NaN
+# under fp16. Validate accuracy per model, same as fp16.
+predictor = BoundingBoxPredictor(
+    "/path/to/model", classes, device="tensorrt-bf16", provider_options=PROFILE
+)
+
 # same values work when loading from Vertex
 predictor = model.get_local_predictor(device="cuda")
 ```

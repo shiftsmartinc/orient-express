@@ -63,16 +63,28 @@ class Device:
     CUDA = "cuda"
     TENSORRT = "tensorrt"
     TENSORRT_FP16 = "tensorrt-fp16"
+    TENSORRT_BF16 = "tensorrt-bf16"
 
 
-_TRT_DEVICES = (Device.TENSORRT, Device.TENSORRT_FP16)
+_TRT_DEVICES = (Device.TENSORRT, Device.TENSORRT_FP16, Device.TENSORRT_BF16)
 
 _DEVICE_TO_PROVIDER = {
     Device.CPU: "CPUExecutionProvider",
     Device.CUDA: "CUDAExecutionProvider",
     Device.TENSORRT: "TensorrtExecutionProvider",
     Device.TENSORRT_FP16: "TensorrtExecutionProvider",
+    Device.TENSORRT_BF16: "TensorrtExecutionProvider",
 }
+
+# Engine precision per TRT device — also the cache-scope leaf directory.
+_TRT_PRECISION = {
+    Device.TENSORRT: "fp32",
+    Device.TENSORRT_FP16: "fp16",
+    Device.TENSORRT_BF16: "bf16",
+}
+
+# Provider options reserved for device selection (see _build_providers).
+_PRECISION_OPTIONS = frozenset({"trt_fp16_enable", "trt_bf16_enable"})
 
 
 def parse_trt_profile_shapes(spec: str) -> dict[str, list[int]]:
@@ -190,7 +202,9 @@ _SCOPE_IRRELEVANT_OPTIONS = frozenset(
 )
 
 
-def trt_cache_scope(model_path: str, provider_options: dict | None, fp16: bool) -> str:
+def trt_cache_scope(
+    model_path: str, provider_options: dict | None, precision: str
+) -> str:
     """Relative cache path unique to (model bytes, runtimes, options, precision).
 
     A serialized TRT engine is only valid for the exact model, TensorRT and
@@ -224,7 +238,7 @@ def trt_cache_scope(model_path: str, provider_options: dict | None, fp16: bool) 
     if extra:
         joined = "|".join(f"{key}={value}" for key, value in extra)
         scope += "-o" + hashlib.sha256(joined.encode()).hexdigest()[:8]
-    return f"{scope}/{'fp16' if fp16 else 'fp32'}"
+    return f"{scope}/{precision}"
 
 
 def trt_engine_cache_dir(scope: str) -> str:
@@ -251,7 +265,7 @@ def trt_engine_cache_dir(scope: str) -> str:
 # directories this library created — never the root itself, loose files,
 # or foreign dirs a user co-located under a shared cache root.
 _SCOPE_DIR_RE = re.compile(r"^[0-9a-f]{16}-ort.+-trt.+$")
-_PRECISION_DIRS = ("fp16", "fp32")
+_PRECISION_DIRS = ("fp16", "fp32", "bf16")
 
 
 def _prune_cache_root(root: str, keep: str):
@@ -342,18 +356,38 @@ def _build_providers(
                 "additionally require entries for internal partition inputs — "
                 "it names them in its session-init error."
             )
+        # Engine precision is chosen by the device string, never by provider
+        # options: a device named one precision quietly building another (or
+        # a mixed fp16+bf16 engine) is exactly the ambiguity the dedicated
+        # devices exist to remove. Reject rather than silently override so
+        # the caller's mistaken intent surfaces.
+        conflicting = _PRECISION_OPTIONS & set(provider_options or {})
+        if conflicting:
+            raise ValueError(
+                f"provider_options may not set {', '.join(sorted(conflicting))}: "
+                "engine precision is selected by the device string — use "
+                f"device='{Device.TENSORRT}' (fp32), '{Device.TENSORRT_FP16}' "
+                f"or '{Device.TENSORRT_BF16}' instead."
+            )
         _preload_gpu_dlls()
         _preload_tensorrt_libs()
-        fp16 = device == Device.TENSORRT_FP16
         cache = trt_engine_cache_dir(trt_scope)
         options = {
-            "trt_fp16_enable": fp16,
+            "trt_fp16_enable": device == Device.TENSORRT_FP16,
             "trt_engine_cache_enable": True,
             "trt_engine_cache_path": cache,
             "trt_timing_cache_enable": True,
             "trt_timing_cache_path": cache,
             **(provider_options or {}),
         }
+        if device == Device.TENSORRT_BF16:
+            # bf16 keeps fp32's exponent range at 16-bit throughput — the
+            # 16-bit mode for models whose activations overflow fp16's 65504
+            # max (e.g. DINOv3 backbones, which carry ~1.5e5 residual-stream
+            # activations and NaN under fp16). Set only for this device: ORT
+            # builds predating the option reject unknown provider keys, and
+            # fp32/fp16 users should not pay that compatibility cost.
+            options["trt_bf16_enable"] = True
         return [
             ("TensorrtExecutionProvider", options),
             "CUDAExecutionProvider",
@@ -546,7 +580,7 @@ def create_session(model_path: str, device: str, provider_options: dict | None =
     trt_scope = None
     if device in _TRT_DEVICES:
         trt_scope = trt_cache_scope(
-            model_path, provider_options, fp16=device == Device.TENSORRT_FP16
+            model_path, provider_options, _TRT_PRECISION[device]
         )
     providers = _build_providers(device, provider_options, trt_scope)
 

@@ -4,6 +4,8 @@ import time
 from threading import Event
 from unittest.mock import ANY, MagicMock, patch
 
+import pytest
+
 from orient_express.predictors.runtime import _TrtCacheGcsSync
 
 SCOPE = "abc123-ort1.27.0-trt10.16/fp32"  # what create_session appends
@@ -213,6 +215,42 @@ def test_upload_timeout_from_env(tmp_path, monkeypatch):
     assert make_sync(tmp_path)._timeout == 7.5
 
 
+def test_bf16_device_builds_bf16_engine_options(tmp_path, monkeypatch):
+    # "tensorrt-bf16" must compile a bf16 engine (trt_bf16_enable, fp16 off)
+    # and cache it under its own precision leaf — an engine cached under the
+    # wrong leaf would silently serve the wrong precision
+    from orient_express.predictors import runtime
+
+    monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_DIR", str(tmp_path))
+    model = tmp_path / "m.onnx"
+    model.write_bytes(b"weights")
+    scope = runtime.trt_cache_scope(str(model), _TEST_PROFILE, "bf16")
+    assert scope.endswith("/bf16")
+    with (
+        patch.object(runtime, "_preload_gpu_dlls"),
+        patch.object(runtime, "_preload_tensorrt_libs"),
+    ):
+        providers = runtime._build_providers("tensorrt-bf16", _TEST_PROFILE, scope)
+        name, options = providers[0]
+        assert name == "TensorrtExecutionProvider"
+        assert options["trt_bf16_enable"] is True
+        assert options["trt_fp16_enable"] is False
+        # fp32 and fp16 sessions must not carry the bf16 flag: ORT builds
+        # predating the option reject unknown provider keys
+        for device in ("tensorrt", "tensorrt-fp16"):
+            precision = runtime._TRT_PRECISION[device]
+            plain_scope = runtime.trt_cache_scope(str(model), _TEST_PROFILE, precision)
+            _, plain = runtime._build_providers(device, _TEST_PROFILE, plain_scope)[0]
+            assert "trt_bf16_enable" not in plain
+        # precision is selected by the device string only — caller-passed
+        # precision flags are rejected, never silently merged or overridden
+        for device in ("tensorrt", "tensorrt-fp16", "tensorrt-bf16"):
+            for flag in ("trt_fp16_enable", "trt_bf16_enable"):
+                conflicted = {**_TEST_PROFILE, flag: True}
+                with pytest.raises(ValueError, match="device string"):
+                    runtime._build_providers(device, conflicted, scope)
+
+
 def test_cache_gc_evicts_lru_scopes(tmp_path, monkeypatch):
     import os
 
@@ -264,21 +302,26 @@ def test_trt_cache_scope_keys(tmp_path):
     model_b.write_bytes(b"weights-b")
     profile = {"trt_profile_min_shapes": "images:1x64x64x3"}
 
-    base = trt_cache_scope(str(model_a), None, fp16=False)
-    assert base == trt_cache_scope(str(model_a), None, fp16=False)  # stable
+    base = trt_cache_scope(str(model_a), None, "fp32")
+    assert base == trt_cache_scope(str(model_a), None, "fp32")  # stable
     assert base.endswith("/fp32")
-    assert base != trt_cache_scope(str(model_b), None, fp16=False)  # model
-    assert base != trt_cache_scope(str(model_a), profile, fp16=False)  # profile
-    assert base != trt_cache_scope(str(model_a), None, fp16=True)  # precision
+    assert base != trt_cache_scope(str(model_b), None, "fp32")  # model
+    assert base != trt_cache_scope(str(model_a), profile, "fp32")  # profile
+    # each precision compiles a different engine: three distinct leaves
+    assert base != trt_cache_scope(str(model_a), None, "fp16")
+    assert base != trt_cache_scope(str(model_a), None, "bf16")
+    assert trt_cache_scope(str(model_a), None, "fp16") != trt_cache_scope(
+        str(model_a), None, "bf16"
+    )
 
     # cache plumbing options never split the scope...
     plumbing = {"trt_engine_cache_path": "/x", "trt_timing_cache_enable": True}
-    assert base == trt_cache_scope(str(model_a), plumbing, fp16=False)
+    assert base == trt_cache_scope(str(model_a), plumbing, "fp32")
     # ...but any other option is assumed to change the compiled engine
     fallback = {"trt_layer_norm_fp32_fallback": True}
-    assert base != trt_cache_scope(str(model_a), fallback, fp16=False)
-    assert trt_cache_scope(str(model_a), fallback, fp16=False) != trt_cache_scope(
-        str(model_a), {"trt_builder_optimization_level": 5}, fp16=False
+    assert base != trt_cache_scope(str(model_a), fallback, "fp32")
+    assert trt_cache_scope(str(model_a), fallback, "fp32") != trt_cache_scope(
+        str(model_a), {"trt_builder_optimization_level": 5}, "fp32"
     )
 
 
@@ -290,11 +333,11 @@ def test_trt_cache_scope_keys_tf32_env(tmp_path, monkeypatch):
     model = tmp_path / "a.onnx"
     model.write_bytes(b"weights")
     monkeypatch.delenv("NVIDIA_TF32_OVERRIDE", raising=False)
-    base = trt_cache_scope(str(model), None, fp16=False)
+    base = trt_cache_scope(str(model), None, "fp32")
     monkeypatch.setenv("NVIDIA_TF32_OVERRIDE", "0")
-    assert base != trt_cache_scope(str(model), None, fp16=False)
+    assert base != trt_cache_scope(str(model), None, "fp32")
     monkeypatch.setenv("NVIDIA_TF32_OVERRIDE", "1")
-    assert trt_cache_scope(str(model), None, fp16=False) != base
+    assert trt_cache_scope(str(model), None, "fp32") != base
 
 
 def test_cache_gc_never_touches_foreign_content(tmp_path, monkeypatch):
@@ -423,7 +466,7 @@ def test_corrupt_engine_cache_rebuilds_once(tmp_path, monkeypatch):
     monkeypatch.setenv("ORIENT_EXPRESS_TRT_CACHE_DIR", str(tmp_path))
     model = tmp_path / "m.onnx"
     model.write_bytes(b"weights")
-    scope = trt_cache_scope(str(model), _TEST_PROFILE, fp16=False)
+    scope = trt_cache_scope(str(model), _TEST_PROFILE, "fp32")
     cache_dir = tmp_path / scope
     cache_dir.mkdir(parents=True)
     (cache_dir / "graph_sm89.engine").write_bytes(b"torn")
