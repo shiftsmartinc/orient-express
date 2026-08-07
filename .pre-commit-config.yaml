@@ -1,0 +1,33 @@
+# Runs ruff on `git commit`: ruff-format auto-fixes, ruff-check reports (no fix).
+# ruff only ever touches Python (.py / .pyi / .ipynb), so there's no need to
+# list source dirs — everything else is ignored automatically. We only carve
+# OUT what we don't want linted: analytics/ (separate workspace) and notebooks.
+# ruff-format rewrites files in place; ruff-check only reports (no auto-fix).
+# If formatting changes anything, the commit is aborted so you can review and
+# `git add` the reformatted files, then commit again.
+#
+# One-time setup after cloning:
+#   uv tool install pre-commit    # or: pipx install pre-commit / brew install pre-commit
+#   pre-commit install            # installs the pre-commit hook (see default_install_hook_types)
+#
+# Bypass in an emergency:  git commit --no-verify
+
+default_install_hook_types: [pre-commit]
+
+# Applies to every hook below.
+exclude: '\.ipynb$'
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21
+    hooks:
+      # Formatting — auto-applied (reformats files in place)
+      - id: ruff-format
+        name: ruff format (auto-fix)
+        stages: [pre-commit]
+
+      # Linting — no auto-fix
+      - id: ruff-check
+        name: ruff lint (check only, no fix)
+        args: [--no-fix]
+        stages: [pre-commit]
