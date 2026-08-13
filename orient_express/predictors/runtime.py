@@ -442,11 +442,11 @@ class _TrtCacheGcsSync:
         self._worker: Thread | None = None
         self._start_lock = Lock()
 
-    def _bounded_retry(self):
-        """The default retry policy, but give up within our timeout."""
-        from google.cloud.storage.retry import DEFAULT_RETRY
+    def _bounded_retry_policy(self):
+        """The shared GCS retry policy, bounded by this syncer's timeout."""
+        from ..utils.retry import get_gcs_retry_policy
 
-        return DEFAULT_RETRY.with_timeout(self._timeout)
+        return get_gcs_retry_policy(timeout=self._timeout)
 
     def download(self):
         try:
@@ -454,10 +454,10 @@ class _TrtCacheGcsSync:
 
             bucket_name, path = self._gs.parse_gcs_url(self.prefix)
             bucket = storage.Client().bucket(bucket_name)
-            retry = self._bounded_retry()
+            retry_policy = self._bounded_retry_policy()
             sm_tags = _local_sm_tags()
             for blob in bucket.list_blobs(
-                prefix=path + "/", timeout=self._timeout, retry=retry
+                prefix=path + "/", timeout=self._timeout, retry=retry_policy
             ):
                 name = os.path.basename(blob.name)
                 if not name:
@@ -475,7 +475,9 @@ class _TrtCacheGcsSync:
                     # would trust it forever and the crc sweep would push it
                     # over the good GCS copy, poisoning the whole fleet.
                     tmp = local + ".part"
-                    blob.download_to_filename(tmp, timeout=self._timeout, retry=retry)
+                    blob.download_to_filename(
+                        tmp, timeout=self._timeout, retry=retry_policy
+                    )
                     os.replace(tmp, local)
                 # record what GCS holds; if the local file differs (e.g. it
                 # predates this download attempt), the sweep re-pushes it
@@ -528,7 +530,7 @@ class _TrtCacheGcsSync:
                     local,
                     f"{self.prefix}/{name}",
                     timeout=self._timeout,
-                    retry=self._bounded_retry(),
+                    retry=self._bounded_retry_policy(),
                     chunk_size=self._UPLOAD_CHUNK_BYTES,
                 )
                 self._synced[name] = crc

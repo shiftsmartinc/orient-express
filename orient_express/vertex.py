@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import math
 import os
 import tempfile
@@ -10,13 +9,11 @@ from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 import joblib
 import yaml
-from google.api_core import exceptions as api_exceptions
-from google.api_core import retry as api_retry
 from google.cloud import aiplatform, storage
 from google.cloud.storage import transfer_manager
-from google.cloud.storage.retry import DEFAULT_RETRY
 
 from .utils.paths import get_cache_dir
+from .utils.retry import get_gcs_retry_policy, get_vertex_retry_policy
 
 if TYPE_CHECKING:
     from .predictors import Predictor
@@ -27,75 +24,17 @@ ARTIFACT_DIR = get_cache_dir()
 _last_vertex_init: tuple[str, str] | None = None
 
 
-def _log_retry(transport: str):
-    """Build an on_error callback that records each retried attempt.
-
-    A silent retry is nearly as bad as no retry: the run succeeds, nobody learns
-    the dependency wobbled, and the next incident looks like the first. WARNING
-    rather than INFO because a retry means a remote call already failed once.
-    """
-
-    def on_error(exc: BaseException) -> None:
-        logging.warning("%s call failed, retrying: %r", transport, exc)
-
-    return on_error
-
-
-def _logged_predicate(predicate, transport: str):
-    """Wrap a retry predicate so a retriable failure is logged as it is decided.
-
-    Used for the GCS policy instead of `on_error`. `DEFAULT_RETRY` is Google's own
-    Retry instance and `api_core` exposes no `with_on_error`, so the callback
-    cannot be attached to a copy of it -- the predicate is the only hook reachable
-    without rebuilding the policy and duplicating Google's list of retriable
-    errors, which would then drift from the library.
-
-    Only retriable failures are logged; a permanent one is the caller's to report.
-    """
-
-    def wrapped(exc: BaseException) -> bool:
-        retriable = predicate(exc)
-        if retriable:
-            logging.warning("%s call failed, retrying: %r", transport, exc)
-        return retriable
-
-    return wrapped
-
-
-# Retry policy for Vertex AI control-plane calls (gRPC/GAPIC). Defined once so
-# every remote call inherits it rather than each site deciding for itself --
-# ad-hoc coverage is what let a transient 503 on Model.list fail a whole
-# pipeline run.
+# The two policies this module applies, built by utils.retry so every module
+# retries the same way. One per transport, held as a constant so each remote call
+# inherits it rather than each site deciding for itself -- ad-hoc coverage is
+# what let a transient 503 on Model.list fail a whole pipeline run.
 #
-# google.api_core.retry.Retry rather than utils.retry.retry on purpose: it
-# retries on a PREDICATE, so a genuinely missing model or a permission error
-# fails immediately instead of burning the backoff budget, and it re-raises the
-# original exception so callers can still distinguish 503 from 404. The house
-# decorator catches bare Exception and re-raises a plain Exception, which would
-# defeat get_vertex_model's own raise_exception contract.
-#
-# timeout is the total budget across attempts, so a sustained outage fails the
-# caller in ~1 minute instead of hanging until the pipeline's own timeout.
-VERTEX_RETRY = api_retry.Retry(
-    predicate=api_retry.if_exception_type(
-        api_exceptions.ServiceUnavailable,  # 503
-        api_exceptions.DeadlineExceeded,
-        api_exceptions.InternalServerError,
-        api_exceptions.Aborted,
-        api_exceptions.TooManyRequests,  # 429
-    ),
-    initial=1.0,
-    multiplier=2.0,
-    maximum=10.0,
-    timeout=60.0,
-    on_error=_log_retry("vertex"),
-)
-
-# GCS keeps Google's own backoff and retriable-error set -- only logging is added,
-# so a retried transfer is visible in the pipeline logs like a retried Vertex call.
-GCS_RETRY = DEFAULT_RETRY.with_predicate(
-    _logged_predicate(DEFAULT_RETRY._predicate, "gcs")
-)
+# Both are predicate-based, so a genuinely missing model or a permission error
+# fails immediately instead of burning the backoff budget, and the original
+# exception reaches the caller -- the house decorator would re-raise a plain
+# Exception and defeat get_vertex_model's own raise_exception contract.
+VERTEX_RETRY = get_vertex_retry_policy()
+GCS_RETRY = get_gcs_retry_policy()
 
 # Files larger than this transfer as concurrent chunks; a typical ONNX
 # artifact (~120 MB) is otherwise bottlenecked on a single stream.
@@ -289,11 +228,11 @@ def _download_blob(blob, download_path: str):
 
 
 def _upload_file(bucket, file_path: str, blob_name: str, timeout: float):
-    # The retry policy's total-time budget must scale with the request
-    # timeout: DEFAULT_RETRY gives up after 120s, so with a generous
-    # per-request timeout a single transient failure late in a slow chunk
-    # would kill the upload without ever retrying.
-    retry = DEFAULT_RETRY.with_timeout(max(timeout * 2, 120.0))
+    # Same GCS policy as everywhere else, but the total-time budget must scale
+    # with the request timeout: the default gives up after 120s, so with a
+    # generous per-request timeout a single transient failure late in a slow
+    # chunk would kill the upload without ever retrying.
+    retry_policy = get_gcs_retry_policy(timeout=max(timeout * 2, 120.0))
     blob = bucket.blob(blob_name)
     if os.path.getsize(file_path) > CHUNKED_TRANSFER_THRESHOLD_BYTES:
         transfer_manager.upload_chunks_concurrently(
@@ -302,10 +241,10 @@ def _upload_file(bucket, file_path: str, blob_name: str, timeout: float):
             worker_type=transfer_manager.THREAD,
             max_workers=TRANSFER_MAX_WORKERS,
             timeout=timeout,
-            retry=retry,
+            retry=retry_policy,
         )
     else:
-        blob.upload_from_filename(file_path, timeout=timeout, retry=retry)
+        blob.upload_from_filename(file_path, timeout=timeout, retry=retry_policy)
 
 
 def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True):
