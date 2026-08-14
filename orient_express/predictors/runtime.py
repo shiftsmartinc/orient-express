@@ -12,6 +12,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
 from threading import Event, Lock, Thread
 
+from ..devices import TENSORRT_DEVICES, Device
 from ..utils.paths import get_cache_dir
 from ..utils.retry import get_gcs_retry_policy
 
@@ -57,18 +58,6 @@ except ImportError as e:
     ) from e
 
 
-class Device:
-    """Valid values for the `device` parameter across the library."""
-
-    CPU = "cpu"
-    CUDA = "cuda"
-    TENSORRT = "tensorrt"
-    TENSORRT_FP16 = "tensorrt-fp16"
-    TENSORRT_BF16 = "tensorrt-bf16"
-
-
-_TRT_DEVICES = (Device.TENSORRT, Device.TENSORRT_FP16, Device.TENSORRT_BF16)
-
 _DEVICE_TO_PROVIDER = {
     Device.CPU: "CPUExecutionProvider",
     Device.CUDA: "CUDAExecutionProvider",
@@ -103,6 +92,133 @@ def parse_trt_profile_shapes(spec: str) -> dict[str, list[int]]:
                 "expected 'input_name:1x576x576x3,other_input:1x2'."
             ) from None
     return shapes
+
+
+def gpu_available() -> bool:
+    """Cheap probe: is an NVIDIA GPU visible to this process?
+
+    Checks device nodes first (covers containers — Vertex injects
+    /dev/nvidia* into GPU-attached deployments) and falls back to
+    nvidia-smi (covers hosts).
+    """
+    if glob.glob("/dev/nvidia[0-9]*"):
+        return True
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=count", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return out.returncode == 0 and bool(out.stdout.strip())
+    except Exception:  # noqa: BLE001 - probe only
+        return False
+
+
+def _normalize_trt_batch(trt_batch: int | tuple[int, int, int]) -> tuple[int, int, int]:
+    """(min, opt, max) from `trt_batch`; a bare N means (1, N, N).
+
+    min stays 1 so a ragged final batch never falls out of profile, while
+    opt tunes for N — the shape a batch pipeline actually sends.
+    """
+    if isinstance(trt_batch, int) and not isinstance(trt_batch, bool):
+        if trt_batch < 1:
+            raise ValueError(f"trt_batch must be >= 1, got {trt_batch}")
+        return (1, trt_batch, trt_batch)
+    try:
+        low, opt, high = trt_batch
+        low, opt, high = int(low), int(opt), int(high)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"trt_batch must be an int or a (min, opt, max) triple, got {trt_batch!r}"
+        ) from None
+    if not 1 <= low <= opt <= high:
+        raise ValueError(
+            f"trt_batch must satisfy 1 <= min <= opt <= max, got {trt_batch!r}"
+        )
+    return (low, opt, high)
+
+
+def trt_profile_for_batch(model_path: str, trt_batch) -> dict:
+    """trt_profile_* specs that range only the model's batch dimension.
+
+    TensorRT demands complete shapes for every input, but the batch range
+    is the only part a caller can meaningfully choose: every other
+    dimension is pinned by the graph, and TRT discards whatever is written
+    there (measured — a profile claiming 999x999 still runs a 576x576
+    input). So take the batch bounds from the caller and transcribe the
+    rest off the model. The throwaway CPU session skips graph
+    optimization; only the declared input shapes are read from it.
+
+    The batch dimension is found by its ONNX symbolic name rather than by
+    position, which is what makes multi-input models work: detection's
+    `images` and `target_sizes` share one symbolic dim, so a single bound
+    fans out to every input carrying it, at whatever axis it sits. Two or
+    more distinct symbolic names are ambiguous — which one is the batch? —
+    and a fully static graph cannot honour a range at all; both raise
+    rather than quietly profiling something the caller did not ask for.
+    """
+    low, opt, high = _normalize_trt_batch(trt_batch)
+
+    session_options = ort.SessionOptions()
+    session_options.graph_optimization_level = (
+        ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    )
+    session = ort.InferenceSession(
+        model_path, providers=["CPUExecutionProvider"], sess_options=session_options
+    )
+    inputs = [(inp.name, inp.shape) for inp in session.get_inputs()]
+    model = os.path.basename(model_path)
+    symbolic = {d for _, shape in inputs for d in shape if not isinstance(d, int)}
+
+    if len(symbolic) > 1:
+        raise ValueError(
+            f"{model} has more than one dynamic dimension "
+            f"({', '.join(sorted(symbolic))}); which one is the batch cannot "
+            "be inferred. Pass explicit trt_profile_min/opt/max_shapes "
+            "instead."
+        )
+    if not symbolic:
+        pinned = inputs[0][1][0] if inputs and inputs[0][1] else None
+        if (low, opt, high) != (pinned, pinned, pinned):
+            raise ValueError(
+                f"{model} is a static export pinned at batch {pinned}, so "
+                f"trt_batch={trt_batch!r} cannot be honoured. Re-export with a "
+                "dynamic batch dimension (see MODEL_REQUIREMENTS.md), or pass "
+                f"trt_batch={pinned} to profile the batch it does support."
+            )
+
+    def spec(batch: int) -> str:
+        return ",".join(
+            name
+            + ":"
+            + "x".join(str(d) if isinstance(d, int) else str(batch) for d in shape)
+            for name, shape in inputs
+        )
+
+    return {
+        "trt_profile_min_shapes": spec(low),
+        "trt_profile_opt_shapes": spec(opt),
+        "trt_profile_max_shapes": spec(high),
+    }
+
+
+def apply_trt_batch(
+    model_path: str, device: str, trt_batch, provider_options: dict | None
+) -> dict:
+    """Fold `trt_batch` into provider_options as profile specs."""
+    if device not in TENSORRT_DEVICES:
+        raise ValueError(
+            f"trt_batch selects a TensorRT optimization profile and does not "
+            f"apply to device='{device}'."
+        )
+    given = set(_PROFILE_OPTIONS) & set(provider_options or {})
+    if given:
+        raise ValueError(
+            f"pass either trt_batch or explicit profile shapes, not both (got "
+            f"trt_batch and {', '.join(sorted(given))})."
+        )
+    return {**trt_profile_for_batch(model_path, trt_batch), **(provider_options or {})}
 
 
 def _preload_gpu_dlls():
@@ -341,7 +457,7 @@ def _build_providers(
         # search.
         options = {"cudnn_conv_algo_search": "HEURISTIC", **(provider_options or {})}
         return [("CUDAExecutionProvider", options), "CPUExecutionProvider"]
-    if device in _TRT_DEVICES:
+    if device in TENSORRT_DEVICES:
         missing = [
             key for key in _PROFILE_OPTIONS if not (provider_options or {}).get(key)
         ]
@@ -561,21 +677,33 @@ def _clear_trt_cache_dir(path: str):
                 logging.warning(f"Could not remove corrupt cache file {target}: {e}")
 
 
-def create_session(model_path: str, device: str, provider_options: dict | None = None):
+def create_session(
+    model_path: str,
+    device: str,
+    provider_options: dict | None = None,
+    graph_optimizations: bool = True,
+):
     """Create an ORT InferenceSession for `device`, failing loudly on fallback.
+
+    `graph_optimizations=False` runs the graph as exported (ORT's
+    ORT_DISABLE_ALL). See ImagePredictor for when that is worth doing.
 
     Returns (session, trt_cache_sync); trt_cache_sync is a _TrtCacheGcsSync
     when device is a tensorrt variant and ORIENT_EXPRESS_TRT_CACHE_GCS is
     set, else None.
     """
     session_options = ort.SessionOptions()
-    session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    session_options.graph_optimization_level = (
+        ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        if graph_optimizations
+        else ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    )
     session_options.enable_mem_pattern = True
     session_options.enable_cpu_mem_arena = True
     session_options.enable_mem_reuse = True
 
     trt_scope = None
-    if device in _TRT_DEVICES:
+    if device in TENSORRT_DEVICES:
         trt_scope = trt_cache_scope(
             model_path, provider_options, _TRT_PRECISION[device]
         )

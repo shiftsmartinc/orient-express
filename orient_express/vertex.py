@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
+import re
 import tempfile
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +14,7 @@ import yaml
 from google.cloud import aiplatform, storage
 from google.cloud.storage import transfer_manager
 
+from .devices import ALL_DEVICES, Device
 from .utils.paths import get_cache_dir
 from .utils.retry import get_gcs_retry_policy, get_vertex_retry_policy
 
@@ -62,6 +65,19 @@ def _resolve_upload_timeout(timeout: float | None) -> float:
     return float(timeout)
 
 
+# The device= token deploy_to_endpoint stamps into the DeployedModel's
+# display name, and get_deployed_model_device parses back out. Vertex has
+# no deploy-time env vars (containerSpec.env is fixed at upload), so the
+# display name is the carrier for per-deployment intent.
+_DEVICE_TOKEN_RE = re.compile(r"(?:^|\s)device=([a-z0-9-]+)")
+
+# Machine families whose GPUs are built into the machine type, so
+# accelerator_count=0 does not mean "no GPU" for them. Used only to suppress
+# a warning — the list going stale as GCP adds families must never block a
+# deployment, which is why the check below warns instead of raising.
+_GPU_MACHINE_PREFIXES = ("a2-", "a3-", "g2-")
+
+
 class VertexModel:
     def __init__(
         self,
@@ -85,13 +101,65 @@ class VertexModel:
         machine_type: str,
         min_replica_count: int,
         max_replica_count: int,
+        accelerator_type: str | None = None,
+        accelerator_count: int = 0,
+        device: str | None = None,
     ):
+        """Deploy this model version to an endpoint.
+
+        `device` picks the inference runtime for THIS deployment ('cpu',
+        'cuda', 'tensorrt', 'tensorrt-fp16', 'tensorrt-bf16') — the same
+        model version can serve different devices on different endpoints,
+        no re-upload. It rides in the DeployedModel's display name as a
+        `device=` token; at boot the serving container reads it back (see
+        get_deployed_model_device) and fails loudly if that device can't
+        load. Default None lets the container pick from its hardware: cuda
+        when a GPU is attached, else cpu. Only the TensorRT tiers, which
+        change the numbers, have to be asked for by name.
+        """
+        if device is not None and device not in ALL_DEVICES:
+            raise ValueError(
+                f"device must be one of {', '.join(ALL_DEVICES)} (got {device!r})"
+            )
+        if device == Device.CPU and accelerator_count:
+            # Explicitly pinning cpu on a GPU machine means paying for an
+            # accelerator inference will never touch.
+            warnings.warn(
+                f"Deploying with {accelerator_count}x {accelerator_type} but "
+                "device='cpu': the container will not use the GPU. Drop the "
+                "device argument to let it pick cuda automatically.",
+                stacklevel=2,
+            )
+        if (
+            device is not None
+            and device != Device.CPU
+            and not accelerator_count
+            and not machine_type.startswith(_GPU_MACHINE_PREFIXES)
+        ):
+            # The container fails loudly at boot when the GPU provider can't
+            # load, but that costs an image pull and a model download to
+            # discover; say it here instead. Only a warning: A2/G2-style
+            # machines carry GPUs without an accelerator_count, so this
+            # cannot prove the deployment is wrong.
+            warnings.warn(
+                f"device={device!r} needs a GPU, but {machine_type} was "
+                "deployed with no accelerator — the container will fail to "
+                "start. Pass accelerator_type/accelerator_count, or use a "
+                "GPU machine type.",
+                stacklevel=2,
+            )
+        deployed_model_display_name = self.model_name
+        if device is not None:
+            deployed_model_display_name = f"{self.model_name} device={device}"
         endpoint = self.get_or_create_endpoint(endpoint_name)
         VERTEX_RETRY(self.vertex_model.deploy)(
             endpoint=endpoint,
+            deployed_model_display_name=deployed_model_display_name,
             machine_type=machine_type,
             min_replica_count=min_replica_count,
             max_replica_count=max_replica_count,
+            accelerator_type=accelerator_type,
+            accelerator_count=accelerator_count,
             traffic_percentage=100,
         )
 
@@ -277,6 +345,78 @@ def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True)
         ]
         for future in futures:
             future.result()
+
+
+def _gce_metadata(path: str) -> str:
+    """Read one key from the GCE metadata server.
+
+    Reachable inside Vertex serving containers — it is what supplies the
+    application-default credentials the artifact download already relies on.
+    """
+    import requests
+
+    response = requests.get(
+        f"http://metadata.google.internal/computeMetadata/v1/{path}",
+        headers={"Metadata-Flavor": "Google"},
+        timeout=5,
+    )
+    response.raise_for_status()
+    return response.text
+
+
+def _serving_project_and_region() -> tuple[str, str]:
+    """Project and region of the Vertex deployment running this process.
+
+    Vertex documents AIP_ENDPOINT_ID and AIP_DEPLOYED_MODEL_ID but not a
+    project/region pair for serving containers, so both come from the
+    metadata server (AIP_PROJECT_NUMBER short-circuits it where present).
+    """
+    project = os.environ.get("AIP_PROJECT_NUMBER") or _gce_metadata(
+        "project/numeric-project-id"
+    )
+    zone = _gce_metadata("instance/zone").rsplit("/", 1)[-1]  # e.g. us-west1-b
+    return project, zone.rsplit("-", 1)[0]
+
+
+def get_deployed_model_device() -> str | None:
+    """The device= token of the DeployedModel this process is serving.
+
+    Vertex fixes container env at model upload, so per-deployment intent
+    can't arrive as an env var; deploy_to_endpoint(device=...) stamps it
+    into the DeployedModel's display name instead, and this reads it back
+    through the deployment identity Vertex injects (AIP_ENDPOINT_ID +
+    AIP_DEPLOYED_MODEL_ID). Returns None when not on Vertex, no token was
+    stamped, or the lookup fails (missing endpoints.get permission, API
+    outage) — the caller then serves on its default device, so this lookup
+    can never brick a deployment that didn't ask for a device.
+    """
+    endpoint_id = os.environ.get("AIP_ENDPOINT_ID")
+    deployed_model_id = os.environ.get("AIP_DEPLOYED_MODEL_ID")
+    if not (endpoint_id and deployed_model_id):
+        return None
+    try:
+        project, region = _serving_project_and_region()
+        endpoint = aiplatform.Endpoint(
+            endpoint_name=(
+                f"projects/{project}/locations/{region}/endpoints/{endpoint_id}"
+            ),
+            project=project,
+            location=region,
+        )
+        for deployed in endpoint.gca_resource.deployed_models:
+            if deployed.id == deployed_model_id:
+                match = _DEVICE_TOKEN_RE.search(deployed.display_name or "")
+                return match.group(1) if match else None
+        logging.warning(
+            f"deployed model {deployed_model_id} not found on endpoint "
+            f"{endpoint_id}; falling back to the default device"
+        )
+    except Exception as e:  # noqa: BLE001 - never brick a boot over this
+        logging.warning(
+            f"could not read deploy-time device from endpoint {endpoint_id} "
+            f"({e}); falling back to the default device"
+        )
+    return None
 
 
 def upload_model(
