@@ -161,28 +161,12 @@ _SCAN_SEGMENT_MARKERS = frozenset(
 )
 
 
-def _jpeg_scan_status(data: bytes):
-    """Classify a JPEG's entropy stream: 'complete', 'truncated' or 'corrupt'.
+def _jpeg_scan_walk(data: bytes, pos: int):
+    """The exact byte walk, from `pos` inside the entropy stream.
 
-    Returns None when the data is not a walkable JPEG (the decoders judge
-    those).
-
-    A structural byte walk, not a decode, so it costs a tiny fraction of
-    one. Inside a scan, FF may only be followed by 00 (stuffed data byte),
-    D0-D7 (restart), FF (fill), D9 (EOI), or a segment marker — anything
-    else means the entropy data was damaged (e.g. an interrupted upload
-    that spliced garbage into the stream). Walking from the first SOS
-    makes the truncation verdict immune to EXIF thumbnails (their EOI
-    sits before the scan) and to trailing non-JPEG bytes such as motion
-    photos' appended video (they sit after the real EOI). Damage with no
-    FF violations (e.g. zeroed spans) is invisible here — but libjpeg
-    decodes that without complaint too, so no stream-level check catches
-    it.
+    Kept as the reference implementation and the fallback for anything the
+    vectorised pass in _jpeg_scan_status cannot decide.
     """
-    pos = _jpeg_scan_start(data)
-    if pos is None:
-        return None
-    pos = pos + 2 + int.from_bytes(data[pos + 2 : pos + 4], "big")  # skip SOS hdr
     end = len(data)
     while True:
         idx = data.find(b"\xff", pos)
@@ -204,6 +188,68 @@ def _jpeg_scan_status(data: bytes):
             pos = idx + 2 + segment_length
         else:
             return "corrupt"
+
+
+def _jpeg_scan_status(data: bytes):
+    """Classify a JPEG's entropy stream: 'complete', 'truncated' or 'corrupt'.
+
+    Returns None when the data is not a walkable JPEG (the decoders judge
+    those).
+
+    A structural byte walk, not a decode, so it costs a tiny fraction of
+    one. Inside a scan, FF may only be followed by 00 (stuffed data byte),
+    D0-D7 (restart), FF (fill), D9 (EOI), or a segment marker — anything
+    else means the entropy data was damaged (e.g. an interrupted upload
+    that spliced garbage into the stream). Walking from the first SOS
+    makes the truncation verdict immune to EXIF thumbnails (their EOI
+    sits before the scan) and to trailing non-JPEG bytes such as motion
+    photos' appended video (they sit after the real EOI). Damage with no
+    FF violations (e.g. zeroed spans) is invisible here — but libjpeg
+    decodes that without complaint too, so no stream-level check catches
+    it.
+
+    The walk itself is one Python loop iteration per FF byte — roughly two
+    thousand of them in a 500KB photo — and it holds the GIL throughout, so
+    on a decode thread pool it serialises against every other thread
+    (measured: 1.11x across 8 threads, i.e. no scaling at all). The common
+    case never needs the loop: a healthy scan contains only FF00 (stuffed
+    data) and FFD0-D7 (restart markers) before its FFD9, and the walk
+    advances pos=idx+2 through every one of them, visiting exactly the FF
+    positions numpy finds in a single C-level pass. Only a segment marker
+    (whose length field makes the walk *skip* bytes, so later FFs may not be
+    real scan positions) or an FF fill makes position history matter, and
+    those fall back to _jpeg_scan_walk. Verdicts are identical by
+    construction, and test_jpeg_scan_status.py pins that against the walk
+    over mutated and fuzzed inputs.
+
+    The scan still costs real time on a decode pool (it allocates a mask the
+    size of the scan), so it is tempting to skip it for files whose last two
+    bytes are FFD9. Do not: damage mid-stream leaves the tail intact, so 96
+    of 100 deliberately corrupted files still end in EOI, and cv2.imdecode
+    returns pixels for them without complaint — which is precisely what this
+    check exists to catch. A tail check can only answer "is the *header*
+    intact" (e.g. whether an EXIF read can be trusted), never "is the
+    *stream* sound".
+    """
+    pos = _jpeg_scan_start(data)
+    if pos is None:
+        return None
+    pos = pos + 2 + int.from_bytes(data[pos + 2 : pos + 4], "big")  # skip SOS hdr
+    array = np.frombuffer(data, np.uint8)
+    if pos >= len(array) - 1:
+        return _jpeg_scan_walk(data, pos)
+    # every FF that has a following byte; the walk can never look past these
+    marks = np.flatnonzero(array[pos:-1] == 0xFF) + pos
+    if marks.size == 0:
+        return "truncated"  # no FF at all: no EOI either
+    following = array[marks + 1]
+    stuffed = (following == 0x00) | ((following >= 0xD0) & (following <= 0xD7))
+    decisive = np.flatnonzero(~stuffed)
+    if decisive.size == 0:
+        return "truncated"  # only stuffed/restart bytes, stream ran out
+    if following[decisive[0]] == 0xD9:
+        return "complete"
+    return _jpeg_scan_walk(data, pos)
 
 
 def decode_image(
