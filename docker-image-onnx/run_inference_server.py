@@ -13,7 +13,12 @@ from orient_express.predictors import (
     get_predictor,
     gpu_available,
 )
-from orient_express.serving import build_predict_kwargs, decode_input, download_image
+from orient_express.serving import (
+    build_predict_kwargs,
+    decode_input,
+    download_image,
+    runtime_info_response,
+)
 from orient_express.utils.image_processor import fix_rotation
 from orient_express.vertex import (
     ARTIFACT_DIR,
@@ -32,6 +37,7 @@ class OnnxImageModel(Model):
         self.name = name
         self.artifacts_path = artifacts_path
         self.model = None
+        self.device = None
 
     def load(self):
         logging.info(f"[{self.name}] loading model from GCS")
@@ -53,6 +59,7 @@ class OnnxImageModel(Model):
             or (Device.CUDA if gpu_available() else Device.CPU)
         )
         logging.info(f"[{self.name}] serving device: {device}")
+        self.device = device
         # TensorRT needs an optimization profile and a deployment supplies
         # only a device string; trt_batch is the whole of what serving can
         # say about shapes. opt=1 because the dominant online request is a
@@ -103,6 +110,11 @@ class OnnxImageModel(Model):
         except Exception as e:
             logging.exception(f"[{self.name}] failed to decode input: {e}\n{inputs}")
             return {"error": "Failed to decode input"}
+
+        if parameters.get("runtime_info"):
+            # deploy-time verification (see VertexModel.deploy_to_endpoint):
+            # report the provider the live ORT session actually activated
+            return runtime_info_response(self.model, self.device)
 
         include_debug = bool(parameters.get("debug_image", True))
         predict_kwargs = build_predict_kwargs(self.model.predict, parameters)

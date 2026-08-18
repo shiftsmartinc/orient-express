@@ -1496,7 +1496,10 @@ class TestGetDeployedModelDevice:
 
     def _endpoint_with(self, deployed_models):
         endpoint = MagicMock()
-        endpoint.gca_resource.deployed_models = deployed_models
+        # get_deployed_model_device must use list_models(), which forces the
+        # GET; the SDK's lazily-constructed Endpoint holds only a name-only
+        # stub in gca_resource
+        endpoint.list_models.return_value = deployed_models
         return endpoint
 
     @staticmethod
@@ -1684,3 +1687,153 @@ class TestDeployAcceleratorWarning:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             self._deploy(machine_type="n1-standard-4", device="cpu")
+
+
+class TestDeployDisplayNameLimit:
+    """Vertex caps display names at 128 chars; the device= token must fit."""
+
+    def _model(self, model_name):
+        return VertexModel(
+            vertex_model=MagicMock(),
+            model_name=model_name,
+            project_name="p",
+            region="us-west1",
+            version=1,
+        )
+
+    def test_rejects_display_name_over_128_chars(self):
+        # 118-char name + " device=tensorrt-fp16" (21 chars) = 139
+        vertex_model = self._model("m" * 118)
+        with pytest.raises(ValueError, match="128-character limit"):
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="g2-standard-8",
+                min_replica_count=1,
+                max_replica_count=1,
+                device="tensorrt-fp16",
+            )
+        vertex_model.vertex_model.deploy.assert_not_called()
+
+    def test_exactly_128_chars_is_allowed(self):
+        vertex_model = self._model("m" * (128 - len(" device=cpu")))
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [MagicMock()]
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="n1-standard-4",
+                min_replica_count=1,
+                max_replica_count=1,
+                device="cpu",
+            )
+        kwargs = vertex_model.vertex_model.deploy.call_args.kwargs
+        assert len(kwargs["deployed_model_display_name"]) == 128
+
+
+class TestDeployDeviceVerification:
+    """The post-deploy runtime check: ask the container what ORT activated.
+
+    The check reads the live session's provider (via a runtime_info
+    predict), never the boot log — ORT can fall back to CPU while the
+    deployment looks healthy.
+    """
+
+    def _deploy(self, mock_endpoint, device):
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [mock_endpoint]
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            )
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="g2-standard-8",
+                min_replica_count=1,
+                max_replica_count=1,
+                device=device,
+            )
+
+    @staticmethod
+    def _endpoint_reporting(info):
+        endpoint = MagicMock()
+        endpoint.predict.return_value = MagicMock(predictions=[info])
+        return endpoint
+
+    def test_queries_runtime_info_after_deploy(self):
+        endpoint = self._endpoint_reporting(
+            {"active_provider": "CUDAExecutionProvider"}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(endpoint, device="cuda")
+        endpoint.predict.assert_called_once_with(
+            instances=[{}], parameters={"runtime_info": True}
+        )
+
+    def test_warns_when_runtime_fell_back(self):
+        endpoint = self._endpoint_reporting({"active_provider": "CPUExecutionProvider"})
+        with pytest.warns(UserWarning, match="fell back"):
+            self._deploy(endpoint, device="cuda")
+
+    def test_trt_devices_expect_the_tensorrt_provider(self):
+        endpoint = self._endpoint_reporting(
+            {"active_provider": "CUDAExecutionProvider"}
+        )
+        with pytest.warns(UserWarning, match="TensorrtExecutionProvider"):
+            self._deploy(endpoint, device="tensorrt-fp16")
+
+    def test_warns_when_trt_tier_differs(self):
+        # bf16 asked, fp32 serving: both are TensorrtExecutionProvider, so
+        # only the container's resolved device string tells the tiers apart
+        endpoint = self._endpoint_reporting(
+            {"active_provider": "TensorrtExecutionProvider", "device": "tensorrt"}
+        )
+        with pytest.warns(UserWarning, match="resolved device='tensorrt'"):
+            self._deploy(endpoint, device="tensorrt-bf16")
+
+    def test_no_warning_when_provider_and_tier_match(self):
+        endpoint = self._endpoint_reporting(
+            {
+                "active_provider": "TensorrtExecutionProvider",
+                "device": "tensorrt-bf16",
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(endpoint, device="tensorrt-bf16")
+
+    def test_warns_when_check_call_fails(self):
+        """An unreachable check is 'unconfirmed', never a failed deploy."""
+        endpoint = MagicMock()
+        endpoint.predict.side_effect = RuntimeError("boom")
+        with pytest.warns(UserWarning, match="could not confirm"):
+            self._deploy(endpoint, device="cuda")
+
+    def test_old_image_response_only_logs(self):
+        # an image predating runtime_info answers the probe like a normal
+        # predict; that is unverifiable, not wrong — no warning
+        endpoint = self._endpoint_reporting({"status": "failed to download image"})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(endpoint, device="cuda")
+
+    def test_no_check_without_a_device(self):
+        endpoint = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [endpoint]
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            )
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="g2-standard-8",
+                min_replica_count=1,
+                max_replica_count=1,
+            )
+        endpoint.predict.assert_not_called()

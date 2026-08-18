@@ -12,7 +12,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _package_version
 from threading import Event, Lock, Thread
 
-from ..devices import TENSORRT_DEVICES, Device
+from ..devices import DEVICE_TO_PROVIDER, TENSORRT_DEVICES, Device
 from ..utils.paths import get_cache_dir
 from ..utils.retry import get_gcs_retry_policy
 
@@ -57,14 +57,6 @@ except ImportError as e:
         "(NVIDIA GPU + TensorRT)."
     ) from e
 
-
-_DEVICE_TO_PROVIDER = {
-    Device.CPU: "CPUExecutionProvider",
-    Device.CUDA: "CUDAExecutionProvider",
-    Device.TENSORRT: "TensorrtExecutionProvider",
-    Device.TENSORRT_FP16: "TensorrtExecutionProvider",
-    Device.TENSORRT_BF16: "TensorrtExecutionProvider",
-}
 
 # Engine precision per TRT device — also the cache-scope leaf directory.
 _TRT_PRECISION = {
@@ -511,7 +503,7 @@ def _build_providers(
             "CPUExecutionProvider",
         ]
     raise ValueError(
-        f"Unknown device '{device}'. Supported: {', '.join(_DEVICE_TO_PROVIDER)}."
+        f"Unknown device '{device}'. Supported: {', '.join(DEVICE_TO_PROVIDER)}."
     )
 
 
@@ -753,7 +745,7 @@ def create_session(
     # slowdown that looks like a working deployment. Fail loudly.
     if device != Device.CPU:
         active = session.get_providers()[0]
-        wanted = _DEVICE_TO_PROVIDER[device]
+        wanted = DEVICE_TO_PROVIDER[device]
         if active != wanted:
             raise RuntimeError(
                 f"Requested device '{device}' ({wanted}) but onnxruntime "

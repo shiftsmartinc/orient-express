@@ -72,13 +72,10 @@ def test_infer_only_feeds_model_inputs(detector):
 
 
 def test_device_constants_cover_supported_devices():
-    from orient_express.devices import ALL_DEVICES, Device
-    from orient_express.predictors.runtime import _DEVICE_TO_PROVIDER
+    from orient_express.devices import ALL_DEVICES, DEVICE_TO_PROVIDER, Device
 
     constants = {v for k, v in vars(Device).items() if not k.startswith("_")}
-    assert constants == set(_DEVICE_TO_PROVIDER)
-    # vertex.py validates deploy devices against ALL_DEVICES without being
-    # able to import the provider map (no onnxruntime); keep them in step
+    assert constants == set(DEVICE_TO_PROVIDER)
     assert constants == set(ALL_DEVICES)
 
 

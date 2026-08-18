@@ -22,3 +22,16 @@ class Device:
 TENSORRT_DEVICES = (Device.TENSORRT, Device.TENSORRT_FP16, Device.TENSORRT_BF16)
 
 ALL_DEVICES = (Device.CPU, Device.CUDA, *TENSORRT_DEVICES)
+
+# The ONNX Runtime execution provider each device activates. Provider names
+# are plain strings, so the mapping lives here rather than in
+# predictors.runtime: vertex.py compares a deployment's requested device
+# against the provider the live container reports, and must be able to name
+# the expected provider without importing onnxruntime.
+DEVICE_TO_PROVIDER = {
+    Device.CPU: "CPUExecutionProvider",
+    Device.CUDA: "CUDAExecutionProvider",
+    Device.TENSORRT: "TensorrtExecutionProvider",
+    Device.TENSORRT_FP16: "TensorrtExecutionProvider",
+    Device.TENSORRT_BF16: "TensorrtExecutionProvider",
+}

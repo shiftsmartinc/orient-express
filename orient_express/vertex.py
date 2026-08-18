@@ -14,7 +14,7 @@ import yaml
 from google.cloud import aiplatform, storage
 from google.cloud.storage import transfer_manager
 
-from .devices import ALL_DEVICES, Device
+from .devices import ALL_DEVICES, DEVICE_TO_PROVIDER, Device
 from .utils.paths import get_cache_dir
 from .utils.retry import get_gcs_retry_policy, get_vertex_retry_policy
 
@@ -151,6 +151,18 @@ class VertexModel:
         deployed_model_display_name = self.model_name
         if device is not None:
             deployed_model_display_name = f"{self.model_name} device={device}"
+            # Vertex caps display names at 128 characters, and the device=
+            # token rides in this one (see get_deployed_model_device) — so
+            # refuse a name the token no longer fits into here, with the fix
+            # spelled out, rather than surface Vertex's InvalidArgument.
+            if len(deployed_model_display_name) > 128:
+                raise ValueError(
+                    f"Deployed model display name "
+                    f"'{deployed_model_display_name}' is "
+                    f"{len(deployed_model_display_name)} characters, over "
+                    "Vertex's 128-character limit. Shorten the model name so "
+                    "the device= token fits."
+                )
         endpoint = self.get_or_create_endpoint(endpoint_name)
         VERTEX_RETRY(self.vertex_model.deploy)(
             endpoint=endpoint,
@@ -162,6 +174,70 @@ class VertexModel:
             accelerator_count=accelerator_count,
             traffic_percentage=100,
         )
+        if device is not None:
+            self._warn_unless_device_active(endpoint, device)
+
+    def _warn_unless_device_active(self, endpoint, device: str):
+        """Post-deploy check: did onnxruntime really activate `device`?
+
+        Asks the live container which execution provider its ORT session
+        holds (a runtime_info predict, answered from session.get_providers()
+        — see serving.runtime_info_response) and warns on mismatch. The
+        session is the ground truth: the boot log only records which device
+        the server *asked* for, and ORT can fall back (typically to CPU)
+        without failing the deployment on serving images that predate
+        create_session's fail-loud check. Safe to send right after deploy():
+        the new DeployedModel takes 100% of traffic. Advisory by design — a
+        deployment that serves fine is never failed here, and a container
+        too old to answer runtime_info just logs.
+        """
+        expected = DEVICE_TO_PROVIDER[device]
+        try:
+            response = VERTEX_RETRY(endpoint.predict)(
+                instances=[{}], parameters={"runtime_info": True}
+            )
+            predictions = response.predictions
+            info = predictions[0] if predictions else None
+        except Exception as e:  # noqa: BLE001 - advisory only
+            warnings.warn(
+                f"deployed with device={device!r}, but the post-deploy "
+                f"runtime check failed ({e}); could not confirm that "
+                f"onnxruntime activated {expected}.",
+                stacklevel=3,
+            )
+            return
+        active = info.get("active_provider") if isinstance(info, dict) else None
+        if not isinstance(active, str):
+            logging.info(
+                f"serving container did not report its runtime (serving "
+                f"image predates runtime_info?); device={device!r} was "
+                "stamped but not verified"
+            )
+            return
+        if active != expected:
+            warnings.warn(
+                f"deployed with device={device!r}, which should run on "
+                f"{expected}, but the serving container reports its "
+                f"onnxruntime session activated {active} — the runtime fell "
+                "back. Check the deployment's accelerator and the serving "
+                "image's GPU stack.",
+                stacklevel=3,
+            )
+            return
+        reported = info.get("device")
+        if isinstance(reported, str) and reported != device:
+            # Same provider, different device string — the TensorRT tiers
+            # (fp32/fp16/bf16) all activate TensorrtExecutionProvider, so
+            # only the device the container resolved can tell them apart.
+            warnings.warn(
+                f"deployed with device={device!r} but the serving container "
+                f"resolved device={reported!r}; {expected} is active, but "
+                "not at the requested tier. The device= token is not "
+                "reaching the container as sent — check the serving "
+                "account's aiplatform.endpoints.get permission and that the "
+                "serving image supports this device.",
+                stacklevel=3,
+            )
 
     def get_or_create_endpoint(self, endpoint_name: str):
         endpoint = self.get_endpoint(endpoint_name)
@@ -403,7 +479,13 @@ def get_deployed_model_device() -> str | None:
             project=project,
             location=region,
         )
-        for deployed in endpoint.gca_resource.deployed_models:
+        # list_models() rather than gca_resource: the constructor above is
+        # lazy, so gca_resource holds a name-only stub whose deployed_models
+        # is empty — list_models() forces the GET. Retried because this runs
+        # during container boot, where a transient 503 would otherwise
+        # silently cost the deployment its requested device.
+        deployed_models = VERTEX_RETRY(endpoint.list_models)()
+        for deployed in deployed_models:
             if deployed.id == deployed_model_id:
                 match = _DEVICE_TOKEN_RE.search(deployed.display_name or "")
                 return match.group(1) if match else None
