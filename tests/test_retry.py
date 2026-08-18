@@ -410,15 +410,15 @@ class TestPoliciesAreBuiltInOnePlace:
         )
 
     def test_every_gcs_caller_gets_the_same_predicate(self):
-        """gs, vertex and the TRT cache syncer must agree on what is transient."""
-        from orient_express.predictors.runtime import _TrtCacheGcsSync
+        """gs, vertex and the TRT cache syncer must agree on what is transient.
 
-        syncer = _TrtCacheGcsSync.__new__(_TrtCacheGcsSync)
-        syncer._timeout = 30.0
+        The bounded variant is what the syncer passes; a timeout must not change
+        which errors are retriable, only how long retrying may go on.
+        """
         policies = [
             GCS_RETRY,
             get_gcs_retry_policy(),
-            syncer._bounded_retry_policy(),
+            get_gcs_retry_policy(timeout=30.0),
         ]
 
         # The errors a GCS transfer really fails on, which the old hand-rolled

@@ -13,6 +13,7 @@ from importlib.metadata import version as _package_version
 from threading import Event, Lock, Thread
 
 from ..utils.paths import get_cache_dir
+from ..utils.retry import get_gcs_retry_policy
 
 
 def _preload_cuda_runtime():
@@ -442,19 +443,13 @@ class _TrtCacheGcsSync:
         self._worker: Thread | None = None
         self._start_lock = Lock()
 
-    def _bounded_retry_policy(self):
-        """The shared GCS retry policy, bounded by this syncer's timeout."""
-        from ..utils.retry import get_gcs_retry_policy
-
-        return get_gcs_retry_policy(timeout=self._timeout)
-
     def download(self):
         try:
             from google.cloud import storage
 
             bucket_name, path = self._gs.parse_gcs_url(self.prefix)
             bucket = storage.Client().bucket(bucket_name)
-            retry_policy = self._bounded_retry_policy()
+            retry_policy = get_gcs_retry_policy(timeout=self._timeout)
             sm_tags = _local_sm_tags()
             for blob in bucket.list_blobs(
                 prefix=path + "/", timeout=self._timeout, retry=retry_policy
@@ -530,7 +525,7 @@ class _TrtCacheGcsSync:
                     local,
                     f"{self.prefix}/{name}",
                     timeout=self._timeout,
-                    retry=self._bounded_retry_policy(),
+                    retry=get_gcs_retry_policy(timeout=self._timeout),
                     chunk_size=self._UPLOAD_CHUNK_BYTES,
                 )
                 self._synced[name] = crc

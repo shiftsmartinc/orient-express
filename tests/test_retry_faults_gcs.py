@@ -229,12 +229,21 @@ def test_a_bounded_policy_stops_inside_the_callers_deadline():
     Without it a cold start would stall for the full 120s default on every
     worker, regardless of ORIENT_EXPRESS_TRT_CACHE_TIMEOUT.
     """
-    from orient_express.predictors.runtime import _TrtCacheGcsSync
+    import inspect
 
-    syncer = _TrtCacheGcsSync.__new__(_TrtCacheGcsSync)
-    syncer._timeout = 0.2
-    policy = syncer._bounded_retry_policy()
+    from orient_express.predictors import runtime
+
+    policy = get_gcs_retry_policy(timeout=0.2)
     assert policy._timeout == 0.2
+
+    # And the syncer still passes its timeout in. Dropping the argument is a
+    # silent regression -- the policy falls back to Google's 120s default and
+    # ORIENT_EXPRESS_TRT_CACHE_TIMEOUT stops having any effect.
+    source = inspect.getsource(runtime)
+    calls = source.count("get_gcs_retry_policy(timeout=self._timeout)")
+    assert calls == 2, (
+        f"expected both syncer call sites to bound the budget, got {calls}"
+    )
 
     attempts = []
 
