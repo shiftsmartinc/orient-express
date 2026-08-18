@@ -36,9 +36,10 @@ def exists(gs_url):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(path)
-    # Retried like every other call in this module. An existence check that fails
-    # on a transient 503 reads as "the object is not there", which is the worst
-    # possible way for this to be wrong -- callers branch on the answer.
+    # Retried like every other call in this module. Without the policy below, a
+    # transient 503 here would surface to the caller as "the object is not
+    # there" -- the worst possible way for this to be wrong, since callers
+    # branch on the answer rather than handle an error.
     return blob.exists(retry=get_gcs_retry_policy())
 
 
