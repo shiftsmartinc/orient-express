@@ -1,10 +1,15 @@
 """Tests for orient_express.serving helpers and predictor to_response shapes."""
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
-from orient_express.serving import build_predict_kwargs, decode_input
+from orient_express.serving import (
+    build_predict_kwargs,
+    decode_input,
+    runtime_info_response,
+)
 
 
 class TestDecodeInput:
@@ -71,6 +76,45 @@ class TestBuildPredictKwargs:
             pass
 
         assert build_predict_kwargs(predict, {"confidence": 0.8}) == {"confidence": 0.8}
+
+    def test_runtime_info_is_reserved(self):
+        """runtime_info steers the server; it must never reach predict()."""
+
+        def predict(images, runtime_info=None):
+            pass
+
+        assert build_predict_kwargs(predict, {"runtime_info": True}) == {}
+
+
+class TestRuntimeInfoResponse:
+    """The serving half of the post-deploy device check.
+
+    deploy_to_endpoint compares active_provider against the device it
+    stamped; the answer must come from the live ORT session, not the
+    device the server resolved at boot.
+    """
+
+    def test_reports_active_provider_from_session(self):
+        model = MagicMock()
+        model.session.get_providers.return_value = [
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        assert runtime_info_response(model, "cuda") == {
+            "predictions": [
+                {
+                    "device": "cuda",
+                    "providers": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+                    "active_provider": "CUDAExecutionProvider",
+                }
+            ]
+        }
+
+    def test_model_without_session_reports_device_only(self):
+        # joblib artifacts have no ORT session; the probe still answers
+        assert runtime_info_response(object(), "cpu") == {
+            "predictions": [{"device": "cpu"}]
+        }
 
 
 class TestToResponse:
