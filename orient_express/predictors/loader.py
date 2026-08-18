@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Empty, Full, Queue
 from threading import Event, Thread
 
+from ..utils.retry import get_retry_logger
+
 
 def _log_load_error(item, exc):
     logging.warning(f"ImageLoader: load failed for {item!r}: {exc}")
@@ -31,6 +33,12 @@ class _FetchError:
 
 
 _RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+# The same contract as the api_core policies in utils.retry -- retry on a
+# predicate, back off exponentially, log every retried attempt -- hand-rolled
+# because those policies are synchronous and know nothing about aiohttp's
+# exception types. The logger is shared so the message reads the same.
+_log_fetch_retry = get_retry_logger("http")
 
 
 def _is_transient_fetch_error(exc: BaseException) -> bool:
@@ -317,6 +325,7 @@ class UrlImageLoader:
                                 e
                             ):
                                 raise
+                            _log_fetch_retry(e)
                         await asyncio.sleep(self.retry_backoff * 2**attempt)
 
                 pending: deque = deque()

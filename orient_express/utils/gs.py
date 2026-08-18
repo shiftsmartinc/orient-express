@@ -2,12 +2,9 @@ import logging
 import os
 from urllib.parse import unquote, urlparse
 
-from google.api_core.retry import Retry
 from google.cloud import storage
 
-
-def get_default_retry_policy():
-    return Retry(initial=1.0, maximum=10.0, multiplier=2.0)
+from .retry import get_gcs_retry_policy
 
 
 def parse_gcs_url(gs_url):
@@ -39,7 +36,11 @@ def exists(gs_url):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(path)
-    return blob.exists()
+    # Retried like every other call in this module. Without the policy below, a
+    # transient 503 here would surface to the caller as "the object is not
+    # there" -- the worst possible way for this to be wrong, since callers
+    # branch on the answer rather than handle an error.
+    return blob.exists(retry=get_gcs_retry_policy())
 
 
 def upload_file(
@@ -76,7 +77,7 @@ def upload_file(
         blob.upload_from_file(
             file_obj,
             content_type=content_type,
-            retry=retry if retry is not None else get_default_retry_policy(),
+            retry=retry if retry is not None else get_gcs_retry_policy(),
             timeout=timeout,
         )
 
@@ -110,7 +111,7 @@ def download_file(gs_url, file_path):
     blob = bucket.blob(gs_file_path)
 
     # Download the file
-    blob.download_to_filename(file_path, retry=get_default_retry_policy())
+    blob.download_to_filename(file_path, retry=get_gcs_retry_policy())
 
     logging.info(f"File downloaded from {gs_url} to {file_path}")
 
@@ -121,4 +122,6 @@ def read_file_bytes(gs_url):
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     blob = bucket.blob(path)
-    return blob.download_as_bytes()
+    # download_file two functions up already retried; reading the same object to
+    # bytes had no policy purely because it was written at a different time.
+    return blob.download_as_bytes(retry=get_gcs_retry_policy())

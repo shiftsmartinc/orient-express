@@ -11,9 +11,9 @@ import joblib
 import yaml
 from google.cloud import aiplatform, storage
 from google.cloud.storage import transfer_manager
-from google.cloud.storage.retry import DEFAULT_RETRY
 
 from .utils.paths import get_cache_dir
+from .utils.retry import get_gcs_retry_policy, get_vertex_retry_policy
 
 if TYPE_CHECKING:
     from .predictors import Predictor
@@ -22,6 +22,19 @@ T = TypeVar("T")
 
 ARTIFACT_DIR = get_cache_dir()
 _last_vertex_init: tuple[str, str] | None = None
+
+
+# The two policies this module applies, built by utils.retry so every module
+# retries the same way. One per transport, held as a constant so each remote call
+# inherits it rather than each site deciding for itself -- ad-hoc coverage is
+# what let a transient 503 on Model.list fail a whole pipeline run.
+#
+# Both are predicate-based, so a genuinely missing model or a permission error
+# fails immediately instead of burning the backoff budget, and the original
+# exception reaches the caller -- the house decorator would re-raise a plain
+# Exception and defeat get_vertex_model's own raise_exception contract.
+VERTEX_RETRY = get_vertex_retry_policy()
+GCS_RETRY = get_gcs_retry_policy()
 
 # Files larger than this transfer as concurrent chunks; a typical ONNX
 # artifact (~120 MB) is otherwise bottlenecked on a single stream.
@@ -74,7 +87,7 @@ class VertexModel:
         max_replica_count: int,
     ):
         endpoint = self.get_or_create_endpoint(endpoint_name)
-        self.vertex_model.deploy(
+        VERTEX_RETRY(self.vertex_model.deploy)(
             endpoint=endpoint,
             machine_type=machine_type,
             min_replica_count=min_replica_count,
@@ -95,7 +108,7 @@ class VertexModel:
         cached = self._endpoint_cache.get(endpoint_name)
         if cached is not None:
             return cached
-        endpoints = aiplatform.Endpoint.list(
+        endpoints = VERTEX_RETRY(aiplatform.Endpoint.list)(
             filter=f"display_name={endpoint_name}", order_by="create_time"
         )
         if endpoints:
@@ -103,7 +116,7 @@ class VertexModel:
             return endpoints[0]
 
     def create_endpoint(self, endpoint_name: str):
-        endpoint = aiplatform.Endpoint.create(
+        endpoint = VERTEX_RETRY(aiplatform.Endpoint.create)(
             display_name=endpoint_name,
             project=self.project_name,
             location=self.region,
@@ -120,7 +133,12 @@ class VertexModel:
                 f"Endpoint '{endpoint_name}' not found. Please deploy the model first."
             )
         self.endpoint = endpoint
-        predictions = self.endpoint.predict(instances=instances, parameters=parameters)
+        # Retried too, not just the control plane: inference is idempotent, and
+        # the predicate only matches transient statuses -- 429 in particular is
+        # ordinary endpoint throttling, which backoff is the correct answer to.
+        predictions = VERTEX_RETRY(self.endpoint.predict)(
+            instances=instances, parameters=parameters
+        )
         return predictions.predictions
 
     # the expected_type overload comes first: checkers match overloads in
@@ -187,10 +205,16 @@ def vertex_init(project_name: str, region: str):
             "project/region.",
             stacklevel=2,
         )
-    aiplatform.init(project=project_name, location=region)
+    VERTEX_RETRY(aiplatform.init)(project=project_name, location=region)
     _last_vertex_init = (project_name, region)
 
 
+# Retry the whole blob download rather than passing a retry policy in:
+# download_chunks_concurrently accepts no `retry` argument, so the >8MB branch --
+# which is every ONNX artifact we ship -- would otherwise be the one unprotected
+# path while the small-file branch inherits the client's DEFAULT_RETRY. Wrapping
+# means a failed chunked transfer is re-attempted as a whole.
+@GCS_RETRY
 def _download_blob(blob, download_path: str):
     if blob.size and blob.size > CHUNKED_TRANSFER_THRESHOLD_BYTES:
         transfer_manager.download_chunks_concurrently(
@@ -204,11 +228,11 @@ def _download_blob(blob, download_path: str):
 
 
 def _upload_file(bucket, file_path: str, blob_name: str, timeout: float):
-    # The retry policy's total-time budget must scale with the request
-    # timeout: DEFAULT_RETRY gives up after 120s, so with a generous
-    # per-request timeout a single transient failure late in a slow chunk
-    # would kill the upload without ever retrying.
-    retry = DEFAULT_RETRY.with_timeout(max(timeout * 2, 120.0))
+    # Same GCS policy as everywhere else, but the total-time budget must scale
+    # with the request timeout: the default gives up after 120s, so with a
+    # generous per-request timeout a single transient failure late in a slow
+    # chunk would kill the upload without ever retrying.
+    retry_policy = get_gcs_retry_policy(timeout=max(timeout * 2, 120.0))
     blob = bucket.blob(blob_name)
     if os.path.getsize(file_path) > CHUNKED_TRANSFER_THRESHOLD_BYTES:
         transfer_manager.upload_chunks_concurrently(
@@ -217,10 +241,10 @@ def _upload_file(bucket, file_path: str, blob_name: str, timeout: float):
             worker_type=transfer_manager.THREAD,
             max_workers=TRANSFER_MAX_WORKERS,
             timeout=timeout,
-            retry=retry,
+            retry=retry_policy,
         )
     else:
-        blob.upload_from_filename(file_path, timeout=timeout, retry=retry)
+        blob.upload_from_filename(file_path, timeout=timeout, retry=retry_policy)
 
 
 def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True):
@@ -230,7 +254,10 @@ def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True)
     os.makedirs(dir, exist_ok=True)
     prefix = artifact_path.rstrip("/") + "/"
     to_download = []
-    for blob in bucket.list_blobs(prefix=artifact_path):
+    # list_blobs paginates lazily, so the retry has to wrap the listing itself
+    # rather than the loop -- a transient failure fetching page 2 would otherwise
+    # surface mid-iteration.
+    for blob in bucket.list_blobs(prefix=artifact_path, retry=GCS_RETRY):
         if blob.name.startswith(prefix):
             relative_path = blob.name[len(prefix) :]
         else:
@@ -425,7 +452,7 @@ def upload_model_with_files(
     if labels is None:
         labels = {}
 
-    release = aiplatform.Model.upload(
+    release = VERTEX_RETRY(aiplatform.Model.upload)(
         display_name=model_name,
         artifact_uri=artifact_uri,
         parent_model=parent_model_uri,
@@ -448,7 +475,10 @@ def get_vertex_model(
     raise_exception: bool = True,
 ):
     vertex_init(project_name, region)
-    models = aiplatform.Model.list(filter=f"display_name={model_name}")
+    # The call this issue was filed for: a transient 503 here used to abort the
+    # caller outright. Note the raise below is NOT retried -- a model that is
+    # genuinely absent must fail fast rather than spend the backoff budget.
+    models = VERTEX_RETRY(aiplatform.Model.list)(filter=f"display_name={model_name}")
     if not models:
         if raise_exception:
             raise Exception(
@@ -471,7 +501,9 @@ def get_vertex_model(
         )
 
     try:
-        model = aiplatform.Model(model_name=resource_name, version=str(version))
+        model = VERTEX_RETRY(aiplatform.Model)(
+            model_name=resource_name, version=str(version)
+        )
     except Exception as e:
         if raise_exception:
             raise Exception(

@@ -19,6 +19,7 @@ import pytest
 # Import the module for accessing globals like _last_vertex_init
 import orient_express.vertex as vertex_module
 from orient_express.vertex import (
+    GCS_RETRY,
     VertexModel,
     download_artifacts,
     get_vertex_model,
@@ -205,9 +206,11 @@ class TestArtifactPathConstruction:
         ):
             download_artifacts(tmpdir, "gs://test-bucket/models/test-model/2/")
 
-            # Verify list_blobs called with correct prefix
+            # Verify list_blobs called with correct prefix, and with a retry:
+            # the listing paginates lazily, so a transient failure fetching a
+            # later page would otherwise surface mid-iteration.
             mock_bucket.list_blobs.assert_called_once_with(
-                prefix="models/test-model/2/"
+                prefix="models/test-model/2/", retry=GCS_RETRY
             )
 
     def test_download_artifacts_saves_to_correct_paths(self, mock_storage_client):
