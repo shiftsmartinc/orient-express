@@ -255,12 +255,24 @@ model.deploy_to_endpoint(
 ```
 
 Vertex fixes a container's environment at model upload, so the device can't
-travel as an env var. It rides in the DeployedModel's display name instead
-(`<model> device=tensorrt-fp16`); at boot the serving container finds itself
-via the `AIP_ENDPOINT_ID` / `AIP_DEPLOYED_MODEL_ID` variables Vertex injects
-and reads the token back. For a TensorRT device it also synthesizes the
-required optimization profile from the model's own inputs, covering batches
+travel as an env var. It rides in the **endpoint's display name** instead
+(`detect-gpu device=tensorrt-fp16`); at boot the serving container reads it
+back off the endpoint named by the `AIP_ENDPOINT_ID` variable Vertex
+injects. For a TensorRT device it also synthesizes the required
+optimization profile from the model's own inputs, covering batches
 1..`TRT_MAX_BATCH_SIZE` and splitting larger requests.
+
+The endpoint carries the token rather than the deployed model because Vertex
+attaches a model to its endpoint only after the container passes its health
+checks — a booting container asking for its own deployed model does not find
+it, and cannot wait for it either, since the registration it would be
+waiting on comes after the health check it would be blocking. The endpoint
+already exists when the container starts.
+
+So a device belongs to an endpoint, and deploying to the same endpoint with
+a different device renames it. Endpoints are still looked up by the plain
+name you deployed with — `remote_predict("detect-gpu", ...)` finds
+`detect-gpu device=tensorrt-fp16`.
 
 Omitting `device` lets the hardware decide: `cuda` when the deployment has a
 GPU attached, else `cpu`. CUDA is numerically identical to CPU on every model
@@ -277,10 +289,12 @@ the container to fail: a GPU device on a machine with no accelerator, or
 `device="cpu"` on a machine that has one. The first is only a warning
 because A2/G2 machine types carry GPUs without an `accelerator_count`.
 
-The container reads the token through the Vertex API, so the service account
-it runs as needs `aiplatform.endpoints.get`. Without that permission the
-lookup warns and falls back to the hardware default — the deployment comes
-up healthy and serves, just not on the device that was asked for.
+The container reads the endpoint through the Vertex API, so the service
+account it runs as needs `aiplatform.endpoints.get`. Without that permission
+the lookup warns and falls back to the hardware default — the deployment
+comes up healthy and serves, just not on the device that was asked for. The
+identity Vertex assigns by default may not carry that permission, so a
+`device=` deployment generally wants an explicit `service_account` (below).
 
 Passing `device` therefore makes `deploy_to_endpoint` check the live
 container afterwards and warn if the provider it ended up on isn't the one
@@ -289,11 +303,11 @@ requested. The container log names the device it resolved
 `container_logging` keeps that stream on by default for this reason, and
 `container_logging=False` opts out.
 
-Which account needs the permission depends on how the deployment runs.
-By default Vertex serves the container under its own custom-code agent, an
-identity shared by every custom container in the project — so a permission
-granted for one is granted for all of them. `service_account` overrides it
-per deployment:
+Which account that is depends on how the deployment runs. Left unset, the
+container runs under an identity Vertex assigns, shared with other custom
+containers in the project — so a permission granted for one is granted for
+all of them, and it is not guaranteed to include `endpoints.get`.
+`service_account` names one per deployment instead:
 
 ```python
 model.deploy_to_endpoint(

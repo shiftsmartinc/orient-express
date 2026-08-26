@@ -65,11 +65,42 @@ def _resolve_upload_timeout(timeout: float | None) -> float:
     return float(timeout)
 
 
-# The device= token deploy_to_endpoint stamps into the DeployedModel's
-# display name, and get_deployed_model_device parses back out. Vertex has
-# no deploy-time env vars (containerSpec.env is fixed at upload), so the
-# display name is the carrier for per-deployment intent.
+# The device= token deploy_to_endpoint stamps into the ENDPOINT's display
+# name, and get_endpoint_device parses back out. Vertex has no deploy-time
+# env vars (containerSpec.env is fixed at upload), so a resource the
+# container can read is the only carrier for per-deployment intent — and it
+# has to be the endpoint rather than the DeployedModel, because Vertex only
+# attaches a DeployedModel to its endpoint once the container is already
+# serving, so a booting container cannot see itself.
 _DEVICE_TOKEN_RE = re.compile(r"(?:^|\s)device=([a-z0-9-]+)")
+
+
+# Vertex's cap on a display name. The device= token rides inside one, so a
+# name that no longer fits is rejected with the fix spelled out rather than
+# surfacing Vertex's InvalidArgument.
+_MAX_DISPLAY_NAME = 128
+
+
+def endpoint_display_name(endpoint_name: str, device: str | None) -> str:
+    """The endpoint's display name, carrying `device` when one is asked for.
+
+    Pure formatting: over-long results are rejected where a name is
+    actually written (see _checked_endpoint_display_name), never here, so
+    that looking an endpoint up by a long name still works.
+    """
+    return endpoint_name if device is None else f"{endpoint_name} device={device}"
+
+
+def _checked_endpoint_display_name(endpoint_name: str, device: str | None) -> str:
+    display_name = endpoint_display_name(endpoint_name, device)
+    if len(display_name) > _MAX_DISPLAY_NAME:
+        raise ValueError(
+            f"Endpoint display name '{display_name}' is {len(display_name)} "
+            f"characters, over Vertex's {_MAX_DISPLAY_NAME}-character limit. "
+            "Shorten the endpoint name so the device= token fits."
+        )
+    return display_name
+
 
 # Machine families whose GPUs are built into the machine type, so
 # accelerator_count=0 does not mean "no GPU" for them. Used only to suppress
@@ -112,10 +143,12 @@ class VertexModel:
         `device` picks the inference runtime for THIS deployment ('cpu',
         'cuda', 'tensorrt', 'tensorrt-fp16', 'tensorrt-bf16') — the same
         model version can serve different devices on different endpoints,
-        no re-upload. It rides in the DeployedModel's display name as a
+        no re-upload. It rides in the ENDPOINT's display name as a
         `device=` token; at boot the serving container reads it back (see
-        get_deployed_model_device) and fails loudly if that device can't
-        load. Default None lets the container pick from its hardware: cuda
+        get_endpoint_device) and fails loudly if that device can't load —
+        so an endpoint serves one device, and deploying it again with a
+        different one renames it. Default None lets the container pick
+        from its hardware: cuda
         when a GPU is attached, else cpu. Only the TensorRT tiers, which
         change the numbers, have to be asked for by name.
 
@@ -167,25 +200,12 @@ class VertexModel:
                 "GPU machine type.",
                 stacklevel=2,
             )
-        deployed_model_display_name = self.model_name
-        if device is not None:
-            deployed_model_display_name = f"{self.model_name} device={device}"
-            # Vertex caps display names at 128 characters, and the device=
-            # token rides in this one (see get_deployed_model_device) — so
-            # refuse a name the token no longer fits into here, with the fix
-            # spelled out, rather than surface Vertex's InvalidArgument.
-            if len(deployed_model_display_name) > 128:
-                raise ValueError(
-                    f"Deployed model display name "
-                    f"'{deployed_model_display_name}' is "
-                    f"{len(deployed_model_display_name)} characters, over "
-                    "Vertex's 128-character limit. Shorten the model name so "
-                    "the device= token fits."
-                )
-        endpoint = self.get_or_create_endpoint(endpoint_name)
+        # The endpoint carries the token and must already do so when the
+        # container boots, so name it before deploying, not after.
+        endpoint = self.get_or_create_endpoint(endpoint_name, device)
         VERTEX_RETRY(self.vertex_model.deploy)(
             endpoint=endpoint,
-            deployed_model_display_name=deployed_model_display_name,
+            deployed_model_display_name=self.model_name,
             machine_type=machine_type,
             min_replica_count=min_replica_count,
             max_replica_count=max_replica_count,
@@ -262,12 +282,18 @@ class VertexModel:
                 stacklevel=3,
             )
 
-    def get_or_create_endpoint(self, endpoint_name: str):
+    def get_or_create_endpoint(self, endpoint_name: str, device: str | None = None):
         endpoint = self.get_endpoint(endpoint_name)
-        if endpoint:
-            return endpoint
-        else:
-            return self.create_endpoint(endpoint_name)
+        if endpoint is None:
+            return self.create_endpoint(endpoint_name, device)
+        # An endpoint's display name carries the device token, so redeploying
+        # the same endpoint on a different device has to rewrite it.
+        wanted = _checked_endpoint_display_name(endpoint_name, device)
+        if endpoint.display_name != wanted:
+            VERTEX_RETRY(endpoint.update)(display_name=wanted)
+            self._endpoint_cache.pop(endpoint_name, None)
+            endpoint = self.get_endpoint(endpoint_name)
+        return endpoint
 
     def get_endpoint(self, endpoint_name: str):
         # Endpoint.list is a full API round-trip; resolve each name once per
@@ -275,16 +301,25 @@ class VertexModel:
         cached = self._endpoint_cache.get(endpoint_name)
         if cached is not None:
             return cached
+        # Callers name the endpoint without a device (that is what they
+        # deployed with, and what every remote_predict passes), but its
+        # display name may carry a device= token — so accept the bare name
+        # or any device-suffixed form of it. Enumerating ALL_DEVICES keeps
+        # this an exact server-side match instead of a client-side scan.
+        candidates = [endpoint_name] + [
+            endpoint_display_name(endpoint_name, device) for device in ALL_DEVICES
+        ]
         endpoints = VERTEX_RETRY(aiplatform.Endpoint.list)(
-            filter=f"display_name={endpoint_name}", order_by="create_time"
+            filter=" OR ".join(f'display_name="{name}"' for name in candidates),
+            order_by="create_time",
         )
         if endpoints:
             self._endpoint_cache[endpoint_name] = endpoints[0]
             return endpoints[0]
 
-    def create_endpoint(self, endpoint_name: str):
+    def create_endpoint(self, endpoint_name: str, device: str | None = None):
         endpoint = VERTEX_RETRY(aiplatform.Endpoint.create)(
-            display_name=endpoint_name,
+            display_name=_checked_endpoint_display_name(endpoint_name, device),
             project=self.project_name,
             location=self.region,
         )
@@ -477,21 +512,28 @@ def _serving_project_and_region() -> tuple[str, str]:
     return project, zone.rsplit("-", 1)[0]
 
 
-def get_deployed_model_device() -> str | None:
-    """The device= token of the DeployedModel this process is serving.
+def get_endpoint_device() -> str | None:
+    """The device= token of the endpoint this process is serving on.
 
     Vertex fixes container env at model upload, so per-deployment intent
-    can't arrive as an env var; deploy_to_endpoint(device=...) stamps it
-    into the DeployedModel's display name instead, and this reads it back
-    through the deployment identity Vertex injects (AIP_ENDPOINT_ID +
-    AIP_DEPLOYED_MODEL_ID). Returns None when not on Vertex, no token was
-    stamped, or the lookup fails (missing endpoints.get permission, API
-    outage) — the caller then serves on its default device, so this lookup
-    can never brick a deployment that didn't ask for a device.
+    cannot arrive as an env var; deploy_to_endpoint(device=...) stamps it
+    into the endpoint's display name instead, and this reads it back
+    through AIP_ENDPOINT_ID.
+
+    The endpoint rather than the DeployedModel, because Vertex attaches a
+    DeployedModel to its endpoint only once the container has passed its
+    health checks: a booting container asking for its own DeployedModel
+    does not find it, and cannot wait for it either, since registration is
+    downstream of the health check it would be blocking. The endpoint
+    exists before the container starts, so reading it has no such race.
+
+    Returns None when not on Vertex, when no token was stamped, or when the
+    lookup fails (no aiplatform.endpoints.get on the serving identity, API
+    outage) — the caller then serves on its default device, so this can
+    never brick a deployment that did not ask for one.
     """
     endpoint_id = os.environ.get("AIP_ENDPOINT_ID")
-    deployed_model_id = os.environ.get("AIP_DEPLOYED_MODEL_ID")
-    if not (endpoint_id and deployed_model_id):
+    if not endpoint_id:
         return None
     try:
         project, region = _serving_project_and_region()
@@ -502,20 +544,12 @@ def get_deployed_model_device() -> str | None:
             project=project,
             location=region,
         )
-        # list_models() rather than gca_resource: the constructor above is
-        # lazy, so gca_resource holds a name-only stub whose deployed_models
-        # is empty — list_models() forces the GET. Retried because this runs
-        # during container boot, where a transient 503 would otherwise
-        # silently cost the deployment its requested device.
-        deployed_models = VERTEX_RETRY(endpoint.list_models)()
-        for deployed in deployed_models:
-            if deployed.id == deployed_model_id:
-                match = _DEVICE_TOKEN_RE.search(deployed.display_name or "")
-                return match.group(1) if match else None
-        logging.warning(
-            f"deployed model {deployed_model_id} not found on endpoint "
-            f"{endpoint_id}; falling back to the default device"
-        )
+        # the constructor is lazy, so force the GET; retried because this
+        # runs during container boot, where a transient 503 would otherwise
+        # silently cost the deployment its requested device
+        display_name = VERTEX_RETRY(getattr)(endpoint, "display_name")
+        match = _DEVICE_TOKEN_RE.search(display_name or "")
+        return match.group(1) if match else None
     except Exception as e:  # noqa: BLE001 - never brick a boot over this
         logging.warning(
             f"could not read deploy-time device from endpoint {endpoint_id} "

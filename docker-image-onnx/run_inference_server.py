@@ -23,7 +23,7 @@ from orient_express.utils.image_processor import fix_rotation
 from orient_express.vertex import (
     ARTIFACT_DIR,
     download_artifacts,
-    get_deployed_model_device,
+    get_endpoint_device,
 )
 
 # Largest batch a TensorRT engine is built for. Requests above it are split
@@ -45,7 +45,7 @@ class OnnxImageModel(Model):
         download_artifacts(download_dir, self.artifacts_path)
         # One serving image for every runtime; the device is chosen at
         # DEPLOY time, never upload time. deploy_to_endpoint(device=...)
-        # stamps a device= token on the DeployedModel, read back here. With
+        # stamps a device= token on the endpoint, read back here. With
         # no token the hardware decides — cuda on a GPU-attached deployment,
         # else cpu — so an accelerator is never left idle.
         #
@@ -55,7 +55,7 @@ class OnnxImageModel(Model):
         # in production the deployment is the only place to say this.
         device = (
             os.environ.get("ORIENT_EXPRESS_DEVICE")
-            or get_deployed_model_device()
+            or get_endpoint_device()
             or (Device.CUDA if gpu_available() else Device.CPU)
         )
         logging.info(f"[{self.name}] serving device: {device}")
