@@ -277,11 +277,17 @@ the container to fail: a GPU device on a machine with no accelerator, or
 `device="cpu"` on a machine that has one. The first is only a warning
 because A2/G2 machine types carry GPUs without an `accelerator_count`.
 
-Reading the token requires the serving service account to have
-`aiplatform.endpoints.get`. Without it — or off Vertex entirely — the lookup
-logs a warning and falls back to the hardware default, so a missing
-permission can never brick a deployment, but a `device=` token would be
-silently ignored.
+The container reads the token through the Vertex API, so the service account
+it runs as needs `aiplatform.endpoints.get`. Without that permission the
+lookup warns and falls back to the hardware default — the deployment comes
+up healthy and serves, just not on the device that was asked for.
+
+Passing `device` therefore makes `deploy_to_endpoint` check the live
+container afterwards and warn if the provider it ended up on isn't the one
+requested. The container log names the device it resolved
+(`serving device: ...`) and records why if it could not honour the token;
+`container_logging` keeps that stream on by default for this reason, and
+`container_logging=False` opts out.
 
 ### TensorRT Engine Caching
 

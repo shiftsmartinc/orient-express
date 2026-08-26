@@ -104,6 +104,7 @@ class VertexModel:
         accelerator_type: str | None = None,
         accelerator_count: int = 0,
         device: str | None = None,
+        container_logging: bool = True,
     ):
         """Deploy this model version to an endpoint.
 
@@ -116,6 +117,13 @@ class VertexModel:
         load. Default None lets the container pick from its hardware: cuda
         when a GPU is attached, else cpu. Only the TensorRT tiers, which
         change the numbers, have to be asked for by name.
+
+        `container_logging` keeps the container's stdout/stderr flowing to
+        Cloud Logging. _warn_unless_device_active already reports the
+        provider a deployment ended up on, but only the container log says
+        WHY — the boot line naming the device it resolved, and the warning
+        when it could not read the token at all. Pass False to opt out of
+        the log cost.
         """
         if device is not None and device not in ALL_DEVICES:
             raise ValueError(
@@ -172,6 +180,9 @@ class VertexModel:
             max_replica_count=max_replica_count,
             accelerator_type=accelerator_type,
             accelerator_count=accelerator_count,
+            # the SDK spells this inverted; keep the caller's argument
+            # positive so container_logging=False is the unusual choice
+            disable_container_logging=not container_logging,
             traffic_percentage=100,
         )
         if device is not None:

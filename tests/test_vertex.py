@@ -854,6 +854,7 @@ class TestEndpointManagement:
                 max_replica_count=3,
                 accelerator_type=None,
                 accelerator_count=0,
+                disable_container_logging=False,
                 traffic_percentage=100,
             )
 
@@ -1837,3 +1838,37 @@ class TestDeployDeviceVerification:
                 max_replica_count=1,
             )
         endpoint.predict.assert_not_called()
+
+
+class TestDeployContainerLogging:
+    """Container logging stays on unless the caller opts out.
+
+    _warn_unless_device_active reports which provider a deployment landed
+    on, but only the container log says why it landed there.
+    """
+
+    def _deploy_kwargs(self, **kwargs):
+        mock_inner_model = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [MagicMock()]
+            VertexModel(
+                vertex_model=mock_inner_model,
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            ).deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="n1-standard-4",
+                min_replica_count=1,
+                max_replica_count=1,
+                **kwargs,
+            )
+        return mock_inner_model.deploy.call_args.kwargs
+
+    def test_container_logging_on_by_default(self):
+        assert self._deploy_kwargs()["disable_container_logging"] is False
+
+    def test_container_logging_can_be_disabled(self):
+        kwargs = self._deploy_kwargs(container_logging=False)
+        assert kwargs["disable_container_logging"] is True
