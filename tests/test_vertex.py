@@ -855,6 +855,7 @@ class TestEndpointManagement:
                 accelerator_type=None,
                 accelerator_count=0,
                 disable_container_logging=False,
+                service_account=None,
                 traffic_percentage=100,
             )
 
@@ -1872,3 +1873,33 @@ class TestDeployContainerLogging:
     def test_container_logging_can_be_disabled(self):
         kwargs = self._deploy_kwargs(container_logging=False)
         assert kwargs["disable_container_logging"] is True
+
+
+class TestDeployServiceAccount:
+    """The serving identity is per-deployment, defaulting to Vertex's own."""
+
+    def _deploy_kwargs(self, **kwargs):
+        mock_inner_model = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [MagicMock()]
+            VertexModel(
+                vertex_model=mock_inner_model,
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            ).deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="n1-standard-4",
+                min_replica_count=1,
+                max_replica_count=1,
+                **kwargs,
+            )
+        return mock_inner_model.deploy.call_args.kwargs
+
+    def test_defaults_to_vertex_managed_identity(self):
+        assert self._deploy_kwargs()["service_account"] is None
+
+    def test_user_managed_account_is_passed_through(self):
+        sa = "serving@example-project.iam.gserviceaccount.com"
+        assert self._deploy_kwargs(service_account=sa)["service_account"] == sa

@@ -289,6 +289,26 @@ requested. The container log names the device it resolved
 `container_logging` keeps that stream on by default for this reason, and
 `container_logging=False` opts out.
 
+Which account needs the permission depends on how the deployment runs.
+By default Vertex serves the container under its own custom-code agent, an
+identity shared by every custom container in the project — so a permission
+granted for one is granted for all of them. `service_account` overrides it
+per deployment:
+
+```python
+model.deploy_to_endpoint(
+    "detect-gpu", "g2-standard-8", 1, 3,
+    accelerator_type="NVIDIA_L4", accelerator_count=1,
+    device="tensorrt-fp16",
+    service_account="serving@my-project.iam.gserviceaccount.com",
+)
+```
+
+A user-managed account keeps this deployment's permissions to itself, but it
+replaces the default identity entirely, so it needs everything the container
+does: read access to the model's artifacts, Logging and Monitoring writes,
+and `aiplatform.endpoints.get` when `device` is set.
+
 ### TensorRT Engine Caching
 
 TensorRT compiles the model into a GPU-specific engine on first use (minutes

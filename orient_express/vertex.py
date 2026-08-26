@@ -105,6 +105,7 @@ class VertexModel:
         accelerator_count: int = 0,
         device: str | None = None,
         container_logging: bool = True,
+        service_account: str | None = None,
     ):
         """Deploy this model version to an endpoint.
 
@@ -124,6 +125,16 @@ class VertexModel:
         WHY — the boot line naming the device it resolved, and the warning
         when it could not read the token at all. Pass False to opt out of
         the log cost.
+
+        `service_account` is the identity the serving container runs as.
+        Left unset, Vertex uses its own custom-code agent — one identity
+        shared by every custom container in the project, so any permission
+        it holds is held by all of them. Naming a user-managed account
+        confines this deployment's permissions to it, at the cost of
+        granting that account everything the container needs: read on the
+        model's artifacts, Logging and Monitoring writes, and
+        `aiplatform.endpoints.get` if `device` is used, since the token is
+        read back through the Vertex API.
         """
         if device is not None and device not in ALL_DEVICES:
             raise ValueError(
@@ -183,6 +194,7 @@ class VertexModel:
             # the SDK spells this inverted; keep the caller's argument
             # positive so container_logging=False is the unusual choice
             disable_container_logging=not container_logging,
+            service_account=service_account,
             traffic_percentage=100,
         )
         if device is not None:
