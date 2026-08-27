@@ -255,24 +255,26 @@ model.deploy_to_endpoint(
 ```
 
 Vertex fixes a container's environment at model upload, so the device can't
-travel as an env var. It rides in the **endpoint's display name** instead
-(`detect-gpu device=tensorrt-fp16`); at boot the serving container reads it
-back off the endpoint named by the `AIP_ENDPOINT_ID` variable Vertex
-injects. For a TensorRT device it also synthesizes the required
-optimization profile from the model's own inputs, covering batches
-1..`TRT_MAX_BATCH_SIZE` and splitting larger requests.
+travel as an env var. It is recorded in an **`oe-device` label on the
+endpoint** instead, which the container reads at boot off the endpoint named
+by the `AIP_ENDPOINT_ID` variable Vertex injects. For a TensorRT device it
+also synthesizes the required optimization profile from the model's own
+inputs, covering batches 1..`TRT_MAX_BATCH_SIZE` and splitting larger
+requests.
 
-The endpoint carries the token rather than the deployed model because Vertex
+The endpoint carries it, rather than the deployed model, because Vertex
 attaches a model to its endpoint only after the container passes its health
 checks — a booting container asking for its own deployed model does not find
 it, and cannot wait for it either, since the registration it would be
 waiting on comes after the health check it would be blocking. The endpoint
-already exists when the container starts.
+already exists when the container starts. A label rather than the display
+name, because the name is how you and your dashboards refer to an endpoint
+and this library does not rewrite it.
 
-So a device belongs to an endpoint, and deploying to the same endpoint with
-a different device renames it. Endpoints are still looked up by the plain
-name you deployed with — `remote_predict("detect-gpu", ...)` finds
-`detect-gpu device=tensorrt-fp16`.
+A device therefore belongs to an endpoint and covers every model on it.
+Deploying a different device to an endpoint that already serves something
+is refused, with the fix in the message: use another endpoint, or undeploy
+that one first. An endpoint with nothing deployed yet is simply labelled.
 
 Omitting `device` lets the hardware decide: `cuda` when the deployment has a
 GPU attached, else `cpu`. CUDA is numerically identical to CPU on every model

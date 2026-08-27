@@ -699,11 +699,9 @@ class TestEndpointManagement:
             result = vertex_model.get_endpoint("my-endpoint")
 
             assert result == mock_endpoint
-            call_filter = mock_endpoint_class.list.call_args.kwargs["filter"]
-            # the bare name plus every device-suffixed form of it, so a
-            # caller who names the endpoint without a device still finds it
-            assert 'display_name="my-endpoint"' in call_filter
-            assert 'display_name="my-endpoint device=tensorrt-fp16"' in call_filter
+            mock_endpoint_class.list.assert_called_once_with(
+                filter="display_name=my-endpoint", order_by="create_time"
+            )
 
     def test_get_endpoint_caches_resolved_endpoint(self):
         """Repeated lookups (e.g. remote_predict in a loop) hit the API once."""
@@ -782,6 +780,7 @@ class TestEndpointManagement:
                 display_name="new-endpoint",
                 project="test-project",
                 location="us-central1",
+                labels=None,
             )
 
     def test_get_or_create_endpoint_returns_existing_when_found(self):
@@ -1505,20 +1504,20 @@ class TestGetEndpointDevice:
         monkeypatch.delenv("AIP_PROJECT_NUMBER", raising=False)
 
     @staticmethod
-    def _endpoint(display_name):
+    def _endpoint(labels):
         endpoint = MagicMock()
-        endpoint.display_name = display_name
+        endpoint.labels = labels
         return endpoint
 
     def test_returns_none_off_vertex(self, monkeypatch):
         monkeypatch.delenv("AIP_ENDPOINT_ID")
         assert vertex_module.get_endpoint_device() is None
 
-    def test_reads_token_from_endpoint_display_name(self, monkeypatch):
+    def test_reads_device_from_endpoint_label(self, monkeypatch):
         monkeypatch.setattr(
             vertex_module, "_serving_project_and_region", lambda: ("789", "us-west1")
         )
-        endpoint = self._endpoint("detect-gpu device=tensorrt-fp16")
+        endpoint = self._endpoint({"oe-device": "tensorrt-fp16"})
         with patch(
             "orient_express.vertex.aiplatform.Endpoint", return_value=endpoint
         ) as endpoint_class:
@@ -1533,16 +1532,16 @@ class TestGetEndpointDevice:
         monkeypatch.setattr(
             vertex_module, "_serving_project_and_region", lambda: ("789", "us-west1")
         )
-        endpoint = self._endpoint("detect-gpu device=cuda")
+        endpoint = self._endpoint({"oe-device": "cuda"})
         with patch("orient_express.vertex.aiplatform.Endpoint", return_value=endpoint):
             assert vertex_module.get_endpoint_device() == "cuda"
         endpoint.list_models.assert_not_called()
 
-    def test_returns_none_without_token(self, monkeypatch):
+    def test_returns_none_without_label(self, monkeypatch):
         monkeypatch.setattr(
             vertex_module, "_serving_project_and_region", lambda: ("789", "us-west1")
         )
-        endpoint = self._endpoint("plain-endpoint-name")
+        endpoint = self._endpoint({"team": "ml"})
         with patch("orient_express.vertex.aiplatform.Endpoint", return_value=endpoint):
             assert vertex_module.get_endpoint_device() is None
 
@@ -1695,11 +1694,12 @@ class TestDeployAcceleratorWarning:
             self._deploy(machine_type="n1-standard-4", device="cpu")
 
 
-class TestDeployDisplayNameLimit:
-    """Vertex caps display names at 128 chars; the device= token must fit.
+class TestEndpointDeviceLabel:
+    """The device lives in an endpoint label, never in its name.
 
-    The endpoint carries the token, so it is the endpoint name that has to
-    leave room for it.
+    The label applies to every model on the endpoint, so it is only written
+    onto one with nothing deployed yet; a mismatch on an occupied endpoint
+    is refused rather than moving what is already serving.
     """
 
     def _model(self):
@@ -1711,43 +1711,97 @@ class TestDeployDisplayNameLimit:
             version=1,
         )
 
-    def test_rejects_display_name_over_128_chars(self):
-        # 118-char endpoint name + " device=tensorrt-fp16" (21 chars) = 139
+    def _deploy(self, endpoint, device="tensorrt-fp16"):
         vertex_model = self._model()
         with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
-            endpoint_class.list.return_value = []
-            with pytest.raises(ValueError, match="128-character limit"):
+            endpoint_class.list.return_value = [endpoint] if endpoint else []
+            endpoint_class.create.return_value = MagicMock()
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="detect-gpu",
+                machine_type="g2-standard-8",
+                min_replica_count=1,
+                max_replica_count=1,
+                accelerator_type="NVIDIA_L4",
+                accelerator_count=1,
+                device=device,
+            )
+            return vertex_model, endpoint_class
+
+    def test_new_endpoint_is_created_labelled_and_unrenamed(self):
+        _, endpoint_class = self._deploy(endpoint=None)
+        kwargs = endpoint_class.create.call_args.kwargs
+        assert kwargs["display_name"] == "detect-gpu"
+        assert kwargs["labels"] == {"oe-device": "tensorrt-fp16"}
+
+    def test_empty_endpoint_gets_the_label_added(self):
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-gpu"
+        endpoint.labels = {"team": "ml"}
+        endpoint.list_models.return_value = []
+        self._deploy(endpoint)
+        # existing labels are preserved alongside the device
+        assert endpoint.update.call_args.kwargs["labels"] == {
+            "team": "ml",
+            "oe-device": "tensorrt-fp16",
+        }
+
+    def test_matching_label_is_left_alone(self):
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-gpu"
+        endpoint.labels = {"oe-device": "tensorrt-fp16"}
+        self._deploy(endpoint)
+        endpoint.update.assert_not_called()
+        endpoint.list_models.assert_not_called()
+
+    def test_occupied_endpoint_with_a_different_device_is_refused(self):
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-gpu"
+        endpoint.labels = {"oe-device": "cuda"}
+        endpoint.list_models.return_value = [MagicMock()]
+        vertex_model = self._model()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [endpoint]
+            with pytest.raises(ValueError, match=r"cannot\s+also serve"):
                 vertex_model.deploy_to_endpoint(
-                    endpoint_name="e" * 118,
+                    endpoint_name="detect-gpu",
                     machine_type="g2-standard-8",
                     min_replica_count=1,
                     max_replica_count=1,
+                    accelerator_type="NVIDIA_L4",
+                    accelerator_count=1,
                     device="tensorrt-fp16",
                 )
         vertex_model.vertex_model.deploy.assert_not_called()
+        endpoint.update.assert_not_called()
 
-    def test_exactly_128_chars_is_allowed(self):
-        endpoint_name = "e" * (128 - len(" device=cpu"))
+    def test_occupied_unlabelled_endpoint_is_also_refused(self):
+        """Its models run on the container default; labelling would move them."""
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-cpu"
+        endpoint.labels = {}
+        endpoint.list_models.return_value = [MagicMock(), MagicMock()]
         vertex_model = self._model()
         with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
-            endpoint_class.list.return_value = []
-            endpoint_class.create.return_value = MagicMock()
-            vertex_model.deploy_to_endpoint(
-                endpoint_name=endpoint_name,
-                machine_type="n1-standard-4",
-                min_replica_count=1,
-                max_replica_count=1,
-                device="cpu",
-            )
-        created = endpoint_class.create.call_args.kwargs["display_name"]
-        assert len(created) == 128
+            endpoint_class.list.return_value = [endpoint]
+            with pytest.raises(ValueError, match="the container default"):
+                vertex_model.deploy_to_endpoint(
+                    endpoint_name="detect-cpu",
+                    machine_type="g2-standard-8",
+                    min_replica_count=1,
+                    max_replica_count=1,
+                    accelerator_type="NVIDIA_L4",
+                    accelerator_count=1,
+                    device="tensorrt-fp16",
+                )
+        endpoint.update.assert_not_called()
 
-    def test_a_long_name_can_still_be_looked_up(self):
-        """Lookup must not validate: an existing long name is legitimate."""
-        vertex_model = self._model()
-        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
-            endpoint_class.list.return_value = []
-            assert vertex_model.get_endpoint("e" * 126) is None
+    def test_no_device_never_touches_the_endpoint(self):
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-cpu"
+        endpoint.labels = {"oe-device": "cuda"}
+        self._deploy(endpoint, device=None)
+        endpoint.update.assert_not_called()
+        endpoint.list_models.assert_not_called()
 
 
 class TestDeployDeviceVerification:

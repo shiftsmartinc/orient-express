@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import math
 import os
-import re
 import tempfile
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -65,41 +64,17 @@ def _resolve_upload_timeout(timeout: float | None) -> float:
     return float(timeout)
 
 
-# The device= token deploy_to_endpoint stamps into the ENDPOINT's display
-# name, and get_endpoint_device parses back out. Vertex has no deploy-time
-# env vars (containerSpec.env is fixed at upload), so a resource the
-# container can read is the only carrier for per-deployment intent — and it
-# has to be the endpoint rather than the DeployedModel, because Vertex only
-# attaches a DeployedModel to its endpoint once the container is already
-# serving, so a booting container cannot see itself.
-_DEVICE_TOKEN_RE = re.compile(r"(?:^|\s)device=([a-z0-9-]+)")
+# Endpoint label carrying the device for everything deployed on that
+# endpoint. A label, not the display name: the name is how dashboards and
+# humans refer to an endpoint, and this library has no business rewriting
+# one. Device strings are all lowercase alphanumerics and hyphens, which is
+# exactly what GCP label values allow.
+_DEVICE_LABEL = "oe-device"
 
 
-# Vertex's cap on a display name. The device= token rides inside one, so a
-# name that no longer fits is rejected with the fix spelled out rather than
-# surfacing Vertex's InvalidArgument.
-_MAX_DISPLAY_NAME = 128
-
-
-def endpoint_display_name(endpoint_name: str, device: str | None) -> str:
-    """The endpoint's display name, carrying `device` when one is asked for.
-
-    Pure formatting: over-long results are rejected where a name is
-    actually written (see _checked_endpoint_display_name), never here, so
-    that looking an endpoint up by a long name still works.
-    """
-    return endpoint_name if device is None else f"{endpoint_name} device={device}"
-
-
-def _checked_endpoint_display_name(endpoint_name: str, device: str | None) -> str:
-    display_name = endpoint_display_name(endpoint_name, device)
-    if len(display_name) > _MAX_DISPLAY_NAME:
-        raise ValueError(
-            f"Endpoint display name '{display_name}' is {len(display_name)} "
-            f"characters, over Vertex's {_MAX_DISPLAY_NAME}-character limit. "
-            "Shorten the endpoint name so the device= token fits."
-        )
-    return display_name
+def _device_from_labels(labels) -> str | None:
+    """The device a set of endpoint labels names, or None if none does."""
+    return (labels or {}).get(_DEVICE_LABEL)
 
 
 # Machine families whose GPUs are built into the machine type, so
@@ -143,14 +118,16 @@ class VertexModel:
         `device` picks the inference runtime for THIS deployment ('cpu',
         'cuda', 'tensorrt', 'tensorrt-fp16', 'tensorrt-bf16') — the same
         model version can serve different devices on different endpoints,
-        no re-upload. It rides in the ENDPOINT's display name as a
-        `device=` token; at boot the serving container reads it back (see
-        get_endpoint_device) and fails loudly if that device can't load —
-        so an endpoint serves one device, and deploying it again with a
-        different one renames it. Default None lets the container pick
-        from its hardware: cuda
-        when a GPU is attached, else cpu. Only the TensorRT tiers, which
-        change the numbers, have to be asked for by name.
+        no re-upload. It is recorded in an `oe-device` label on the
+        ENDPOINT, which the serving container reads at boot (see
+        get_endpoint_device), failing loudly if that device can't load.
+        The label covers every model on that endpoint, so one endpoint
+        serves one device: asking an occupied endpoint for a different one
+        is refused rather than moving what is already serving there. The
+        endpoint's name is never touched. Default None lets the container
+        pick from its hardware: cuda when a GPU is attached, else cpu. Only
+        the TensorRT tiers, which change the numbers, have to be asked for
+        by name.
 
         `container_logging` keeps the container's stdout/stderr flowing to
         Cloud Logging. _warn_unless_device_active already reports the
@@ -286,14 +263,36 @@ class VertexModel:
         endpoint = self.get_endpoint(endpoint_name)
         if endpoint is None:
             return self.create_endpoint(endpoint_name, device)
-        # An endpoint's display name carries the device token, so redeploying
-        # the same endpoint on a different device has to rewrite it.
-        wanted = _checked_endpoint_display_name(endpoint_name, device)
-        if endpoint.display_name != wanted:
-            VERTEX_RETRY(endpoint.update)(display_name=wanted)
-            self._endpoint_cache.pop(endpoint_name, None)
-            endpoint = self.get_endpoint(endpoint_name)
+        if device is not None:
+            self._label_endpoint_device(endpoint, device)
         return endpoint
+
+    def _label_endpoint_device(self, endpoint, device: str):
+        """Ensure the endpoint is labelled for `device`, or refuse.
+
+        The label applies to every model on the endpoint, so changing it
+        would hand a different device to whatever is already serving there
+        the next time one of its replicas restarts. It is therefore only
+        written onto an endpoint that has nothing deployed yet; otherwise a
+        mismatch is refused and the caller picks another endpoint.
+        """
+        labelled = _device_from_labels(getattr(endpoint, "labels", None))
+        if labelled == device:
+            return
+        deployed = list(VERTEX_RETRY(endpoint.list_models)())
+        if deployed:
+            raise ValueError(
+                f"endpoint '{endpoint.display_name}' already serves "
+                f"{len(deployed)} model(s) on "
+                f"device={labelled or 'the container default'!r}, so it cannot "
+                f"also serve device={device!r}: the device is a property of the "
+                "endpoint and changing it would move the models already there. "
+                "Deploy to a different endpoint, or undeploy this one first."
+            )
+        labels = dict(getattr(endpoint, "labels", None) or {})
+        labels[_DEVICE_LABEL] = device
+        VERTEX_RETRY(endpoint.update)(labels=labels)
+        self._endpoint_cache.pop(endpoint.display_name, None)
 
     def get_endpoint(self, endpoint_name: str):
         # Endpoint.list is a full API round-trip; resolve each name once per
@@ -301,17 +300,8 @@ class VertexModel:
         cached = self._endpoint_cache.get(endpoint_name)
         if cached is not None:
             return cached
-        # Callers name the endpoint without a device (that is what they
-        # deployed with, and what every remote_predict passes), but its
-        # display name may carry a device= token — so accept the bare name
-        # or any device-suffixed form of it. Enumerating ALL_DEVICES keeps
-        # this an exact server-side match instead of a client-side scan.
-        candidates = [endpoint_name] + [
-            endpoint_display_name(endpoint_name, device) for device in ALL_DEVICES
-        ]
         endpoints = VERTEX_RETRY(aiplatform.Endpoint.list)(
-            filter=" OR ".join(f'display_name="{name}"' for name in candidates),
-            order_by="create_time",
+            filter=f"display_name={endpoint_name}", order_by="create_time"
         )
         if endpoints:
             self._endpoint_cache[endpoint_name] = endpoints[0]
@@ -319,9 +309,10 @@ class VertexModel:
 
     def create_endpoint(self, endpoint_name: str, device: str | None = None):
         endpoint = VERTEX_RETRY(aiplatform.Endpoint.create)(
-            display_name=_checked_endpoint_display_name(endpoint_name, device),
+            display_name=endpoint_name,
             project=self.project_name,
             location=self.region,
+            labels={_DEVICE_LABEL: device} if device is not None else None,
         )
         self._endpoint_cache[endpoint_name] = endpoint
         return endpoint
@@ -544,12 +535,10 @@ def get_endpoint_device() -> str | None:
             project=project,
             location=region,
         )
-        # the constructor is lazy, so force the GET; retried because this
-        # runs during container boot, where a transient 503 would otherwise
-        # silently cost the deployment its requested device
-        display_name = VERTEX_RETRY(getattr)(endpoint, "display_name")
-        match = _DEVICE_TOKEN_RE.search(display_name or "")
-        return match.group(1) if match else None
+        # the constructor is lazy, so this getattr is what forces the GET;
+        # retried because it runs during container boot, where a transient
+        # 503 would otherwise silently cost the deployment its device
+        return _device_from_labels(VERTEX_RETRY(getattr)(endpoint, "labels"))
     except Exception as e:  # noqa: BLE001 - never brick a boot over this
         logging.warning(
             f"could not read deploy-time device from endpoint {endpoint_id} "
