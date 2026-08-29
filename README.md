@@ -227,16 +227,11 @@ predictor = model.get_local_predictor(device="cuda")
 ONNX Runtime's graph fusions are enabled by default. Pass
 `graph_optimizations=False` (to a predictor constructor or `get_predictor`)
 to run the graph exactly as exported. Worth knowing about because the
-serving image sets it for CPU and CUDA: that image is pinned to the CUDA-12
-onnxruntime line, and 1.24.x mis-fuses DINOv3-backbone graphs badly enough
-to return a different answer in every process. Disabling fusion costs
-~14-17% on RF-DETR through those providers.
-
-TensorRT keeps optimizations on, and should: the bug is in onnxruntime's own
-fused kernels, TensorRT executes the numerics itself, and it re-optimizes
-regardless so fusion costs it nothing either way. Some graphs also only
-import into TensorRT once onnxruntime's shape inference has run over them —
-disabling optimizations makes them fail to load.
+serving image sets it: that image is pinned to the CUDA-12 onnxruntime line,
+and 1.24.x mis-fuses DINOv3-backbone graphs badly enough to return a
+different answer in every process. Disabling fusion costs ~14-17% on
+RF-DETR through the CPU and CUDA providers, and nothing at all on TensorRT,
+which re-optimizes the graph itself.
 
 ### Choosing the Serving Device at Deploy Time
 
