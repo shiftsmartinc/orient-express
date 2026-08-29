@@ -60,26 +60,29 @@ class OnnxImageModel(Model):
         )
         logging.info(f"[{self.name}] serving device: {device}")
         self.device = device
-        # TensorRT needs an optimization profile and a deployment supplies
-        # only a device string; trt_batch is the whole of what serving can
-        # say about shapes. opt=1 because the dominant online request is a
-        # single image; predict() splits requests over TRT_MAX_BATCH_SIZE.
-        kwargs = (
-            {"trt_batch": (1, 1, TRT_MAX_BATCH_SIZE)}
-            if device in TENSORRT_DEVICES
-            else {}
-        )
-        # Graph optimizations OFF here, unlike the library default. This
-        # image is pinned to the CUDA-12 onnxruntime line (Vertex's L4
-        # driver cannot run CUDA 13), and onnxruntime 1.24.x fuses
-        # DINOv3-backbone graphs into something that reads uninitialized
-        # memory — the same image scores differently in every replica.
-        # Disabling fusion restores the exported graph's numbers, which
-        # match ORT 1.27 to ~1e-6. Revisit if this image ever moves to a
-        # CUDA-13 onnxruntime: 1.27+ has no such bug.
-        self.model = get_predictor(
-            download_dir, device, graph_optimizations=False, **kwargs
-        )
+        if device in TENSORRT_DEVICES:
+            # TensorRT needs an optimization profile and a deployment
+            # supplies only a device string; trt_batch is the whole of what
+            # serving can say about shapes. opt=1 because the dominant
+            # online request is a single image; predict() splits requests
+            # over TRT_MAX_BATCH_SIZE.
+            kwargs = {"trt_batch": (1, 1, TRT_MAX_BATCH_SIZE)}
+        else:
+            # Graph optimizations OFF for the ORT-executed providers, unlike
+            # the library default: this image is pinned to the CUDA-12
+            # onnxruntime line (Vertex's L4 driver cannot run CUDA 13), and
+            # 1.24.x fuses DINOv3-backbone graphs into something that reads
+            # uninitialized memory, so the same image scores differently in
+            # every replica. Disabling fusion restores the exported graph's
+            # numbers, which match ORT 1.27 to ~1e-6.
+            #
+            # TensorRT keeps them ON: the bug is in ORT's own fused kernels
+            # and TensorRT executes the numerics itself (verified
+            # deterministic on 1.24.3), fusion buys it nothing anyway since
+            # it re-optimizes, and some graphs only import into TensorRT at
+            # all once ORT's shape inference has run over them.
+            kwargs = {"graph_optimizations": False}
+        self.model = get_predictor(download_dir, device, **kwargs)
         self.warmup()
         self.ready = True
         logging.info(f"{self.name} loaded successfully")
