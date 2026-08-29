@@ -11,6 +11,7 @@ All GCS and Vertex AI SDK calls are mocked.
 
 import os
 import tempfile
+import warnings
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -779,6 +780,7 @@ class TestEndpointManagement:
                 display_name="new-endpoint",
                 project="test-project",
                 location="us-central1",
+                labels=None,
             )
 
     def test_get_or_create_endpoint_returns_existing_when_found(self):
@@ -847,10 +849,72 @@ class TestEndpointManagement:
 
             mock_inner_model.deploy.assert_called_once_with(
                 endpoint=mock_endpoint,
+                deployed_model_display_name="test",
                 machine_type="n1-standard-4",
                 min_replica_count=1,
                 max_replica_count=3,
+                accelerator_type=None,
+                accelerator_count=0,
+                disable_container_logging=False,
+                service_account=None,
                 traffic_percentage=100,
+            )
+
+    def test_deploy_to_endpoint_stamps_device_token(self):
+        """device= rides in the ENDPOINT display name.
+
+        The DeployedModel cannot carry it: Vertex attaches one to its
+        endpoint only after the container passes health checks, so a
+        booting container cannot read its own.
+        """
+        mock_inner_model = MagicMock()
+        mock_endpoint = MagicMock()
+        mock_endpoint.display_name = "my-endpoint device=tensorrt-fp16"
+
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [mock_endpoint]
+
+            vertex_model = VertexModel(
+                vertex_model=mock_inner_model,
+                model_name="test",
+                project_name="test-project",
+                region="us-central1",
+                version=1,
+            )
+
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="my-endpoint",
+                machine_type="g2-standard-8",
+                min_replica_count=1,
+                max_replica_count=1,
+                accelerator_type="NVIDIA_L4",
+                accelerator_count=1,
+                device="tensorrt-fp16",
+            )
+
+            kwargs = mock_inner_model.deploy.call_args.kwargs
+            # the DeployedModel keeps the plain model name
+            assert kwargs["deployed_model_display_name"] == "test"
+            assert kwargs["accelerator_type"] == "NVIDIA_L4"
+            assert kwargs["accelerator_count"] == 1
+            # and the endpoint already carried the token before deploying
+            assert mock_endpoint.display_name == "my-endpoint device=tensorrt-fp16"
+
+    def test_deploy_to_endpoint_rejects_unknown_device(self):
+        vertex_model = VertexModel(
+            vertex_model=MagicMock(),
+            model_name="test",
+            project_name="test-project",
+            region="us-central1",
+            version=1,
+        )
+        with pytest.raises(ValueError, match="device must be one of"):
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="my-endpoint",
+                machine_type="n1-standard-4",
+                min_replica_count=1,
+                max_replica_count=1,
+                device="gpu",
             )
 
     def test_remote_predict_raises_when_endpoint_not_found(self):
@@ -1419,3 +1483,496 @@ class TestUploadModelJoblib:
             assert isinstance(result, VertexModel)
             assert result.model_name == "test-joblib"
             assert result.version == 1
+
+
+# -----------------------------------------------------------------------------
+# Deploy-time device resolution (get_endpoint_device)
+# -----------------------------------------------------------------------------
+
+
+class TestGetEndpointDevice:
+    """Reading the deploy-time device= token back at boot.
+
+    The token rides on the ENDPOINT, which exists before the container
+    starts — a DeployedModel does not, since Vertex attaches it only after
+    health checks pass.
+    """
+
+    @pytest.fixture(autouse=True)
+    def aip_env(self, monkeypatch):
+        monkeypatch.setenv("AIP_ENDPOINT_ID", "123")
+        monkeypatch.delenv("AIP_PROJECT_NUMBER", raising=False)
+
+    @staticmethod
+    def _endpoint(labels):
+        endpoint = MagicMock()
+        endpoint.labels = labels
+        return endpoint
+
+    def test_returns_none_off_vertex(self, monkeypatch):
+        monkeypatch.delenv("AIP_ENDPOINT_ID")
+        assert vertex_module.get_endpoint_device() is None
+
+    def test_reads_device_from_endpoint_label(self, monkeypatch):
+        monkeypatch.setattr(
+            vertex_module, "_serving_project_and_region", lambda: ("789", "us-west1")
+        )
+        endpoint = self._endpoint({"oe-device": "tensorrt-fp16"})
+        with patch(
+            "orient_express.vertex.aiplatform.Endpoint", return_value=endpoint
+        ) as endpoint_class:
+            assert vertex_module.get_endpoint_device() == "tensorrt-fp16"
+        assert (
+            endpoint_class.call_args.kwargs["endpoint_name"]
+            == "projects/789/locations/us-west1/endpoints/123"
+        )
+
+    def test_never_consults_the_deployed_models(self, monkeypatch):
+        """The DeployedModel is unreadable at boot, so it must not be used."""
+        monkeypatch.setattr(
+            vertex_module, "_serving_project_and_region", lambda: ("789", "us-west1")
+        )
+        endpoint = self._endpoint({"oe-device": "cuda"})
+        with patch("orient_express.vertex.aiplatform.Endpoint", return_value=endpoint):
+            assert vertex_module.get_endpoint_device() == "cuda"
+        endpoint.list_models.assert_not_called()
+
+    def test_returns_none_without_label(self, monkeypatch):
+        monkeypatch.setattr(
+            vertex_module, "_serving_project_and_region", lambda: ("789", "us-west1")
+        )
+        endpoint = self._endpoint({"team": "ml"})
+        with patch("orient_express.vertex.aiplatform.Endpoint", return_value=endpoint):
+            assert vertex_module.get_endpoint_device() is None
+
+    def test_lookup_failure_degrades_to_none(self, monkeypatch):
+        """A failed lookup must never brick a boot.
+
+        A missing endpoints.get permission or an API outage just means the
+        container serves on its default device.
+        """
+
+        def boom():
+            raise OSError("metadata server unreachable")
+
+        monkeypatch.setattr(vertex_module, "_serving_project_and_region", boom)
+        assert vertex_module.get_endpoint_device() is None
+
+    def test_project_and_region_come_from_metadata_server(self, monkeypatch):
+        """Project and region come from the metadata server.
+
+        Vertex documents no project/region env var for serving containers.
+        """
+        keys = {
+            "project/numeric-project-id": "789",
+            "instance/zone": "projects/789/zones/us-west1-b",
+        }
+        monkeypatch.setattr(vertex_module, "_gce_metadata", lambda path: keys[path])
+        assert vertex_module._serving_project_and_region() == ("789", "us-west1")
+
+    def test_aip_project_number_short_circuits_metadata(self, monkeypatch):
+        monkeypatch.setenv("AIP_PROJECT_NUMBER", "111")
+        monkeypatch.setattr(
+            vertex_module,
+            "_gce_metadata",
+            lambda path: "projects/111/zones/europe-west4-a",
+        )
+        assert vertex_module._serving_project_and_region() == ("111", "europe-west4")
+
+
+class TestDeployAcceleratorWarning:
+    def test_warns_when_gpu_attached_but_cpu_pinned(self):
+        """A GPU nobody uses is a silent, expensive mistake."""
+        mock_endpoint = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [mock_endpoint]
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            )
+            with pytest.warns(UserWarning, match="will not use the GPU"):
+                vertex_model.deploy_to_endpoint(
+                    endpoint_name="e",
+                    machine_type="g2-standard-8",
+                    min_replica_count=1,
+                    max_replica_count=1,
+                    accelerator_type="NVIDIA_L4",
+                    accelerator_count=1,
+                    device="cpu",
+                )
+
+    def test_no_warning_without_a_device(self):
+        """No device means the container picks cuda on GPU hardware."""
+        mock_endpoint = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [mock_endpoint]
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                vertex_model.deploy_to_endpoint(
+                    endpoint_name="e",
+                    machine_type="g2-standard-8",
+                    min_replica_count=1,
+                    max_replica_count=1,
+                    accelerator_type="NVIDIA_L4",
+                    accelerator_count=1,
+                )
+
+    def test_no_warning_when_device_given(self):
+        mock_endpoint = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [mock_endpoint]
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                vertex_model.deploy_to_endpoint(
+                    endpoint_name="e",
+                    machine_type="g2-standard-8",
+                    min_replica_count=1,
+                    max_replica_count=1,
+                    accelerator_type="NVIDIA_L4",
+                    accelerator_count=1,
+                    device="cuda",
+                )
+
+    def _deploy(self, **kwargs):
+        mock_endpoint = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [mock_endpoint]
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            )
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="e",
+                min_replica_count=1,
+                max_replica_count=1,
+                **kwargs,
+            )
+
+    def test_warns_when_gpu_device_has_no_accelerator(self):
+        with pytest.warns(UserWarning, match="no accelerator"):
+            self._deploy(machine_type="n1-standard-4", device="tensorrt-fp16")
+
+    def test_no_warning_when_accelerator_is_attached(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(
+                machine_type="n1-standard-4",
+                accelerator_type="NVIDIA_L4",
+                accelerator_count=1,
+                device="cuda",
+            )
+
+    def test_no_warning_on_machine_types_with_built_in_gpus(self):
+        """A2/G2 carry GPUs without an accelerator_count."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(machine_type="g2-standard-8", device="cuda")
+
+    def test_no_warning_for_cpu_without_accelerator(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(machine_type="n1-standard-4", device="cpu")
+
+
+class TestEndpointDeviceLabel:
+    """The device lives in an endpoint label, never in its name.
+
+    The label applies to every model on the endpoint, so it is only written
+    onto one with nothing deployed yet; a mismatch on an occupied endpoint
+    is refused rather than moving what is already serving.
+    """
+
+    def _model(self):
+        return VertexModel(
+            vertex_model=MagicMock(),
+            model_name="m",
+            project_name="p",
+            region="us-west1",
+            version=1,
+        )
+
+    def _deploy(self, endpoint, device="tensorrt-fp16"):
+        vertex_model = self._model()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [endpoint] if endpoint else []
+            endpoint_class.create.return_value = MagicMock()
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="detect-gpu",
+                machine_type="g2-standard-8",
+                min_replica_count=1,
+                max_replica_count=1,
+                accelerator_type="NVIDIA_L4",
+                accelerator_count=1,
+                device=device,
+            )
+            return vertex_model, endpoint_class
+
+    def test_new_endpoint_is_created_labelled_and_unrenamed(self):
+        _, endpoint_class = self._deploy(endpoint=None)
+        kwargs = endpoint_class.create.call_args.kwargs
+        assert kwargs["display_name"] == "detect-gpu"
+        assert kwargs["labels"] == {"oe-device": "tensorrt-fp16"}
+
+    def test_empty_endpoint_gets_the_label_added(self):
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-gpu"
+        endpoint.labels = {"team": "ml"}
+        endpoint.list_models.return_value = []
+        self._deploy(endpoint)
+        # existing labels are preserved alongside the device
+        assert endpoint.update.call_args.kwargs["labels"] == {
+            "team": "ml",
+            "oe-device": "tensorrt-fp16",
+        }
+
+    def test_matching_label_is_left_alone(self):
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-gpu"
+        endpoint.labels = {"oe-device": "tensorrt-fp16"}
+        self._deploy(endpoint)
+        endpoint.update.assert_not_called()
+        endpoint.list_models.assert_not_called()
+
+    def test_occupied_endpoint_with_a_different_device_is_refused(self):
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-gpu"
+        endpoint.labels = {"oe-device": "cuda"}
+        endpoint.list_models.return_value = [MagicMock()]
+        vertex_model = self._model()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [endpoint]
+            with pytest.raises(ValueError, match=r"cannot\s+also serve"):
+                vertex_model.deploy_to_endpoint(
+                    endpoint_name="detect-gpu",
+                    machine_type="g2-standard-8",
+                    min_replica_count=1,
+                    max_replica_count=1,
+                    accelerator_type="NVIDIA_L4",
+                    accelerator_count=1,
+                    device="tensorrt-fp16",
+                )
+        vertex_model.vertex_model.deploy.assert_not_called()
+        endpoint.update.assert_not_called()
+
+    def test_occupied_unlabelled_endpoint_is_also_refused(self):
+        """Its models run on the container default; labelling would move them."""
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-cpu"
+        endpoint.labels = {}
+        endpoint.list_models.return_value = [MagicMock(), MagicMock()]
+        vertex_model = self._model()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [endpoint]
+            with pytest.raises(ValueError, match="the container default"):
+                vertex_model.deploy_to_endpoint(
+                    endpoint_name="detect-cpu",
+                    machine_type="g2-standard-8",
+                    min_replica_count=1,
+                    max_replica_count=1,
+                    accelerator_type="NVIDIA_L4",
+                    accelerator_count=1,
+                    device="tensorrt-fp16",
+                )
+        endpoint.update.assert_not_called()
+
+    def test_no_device_never_touches_the_endpoint(self):
+        endpoint = MagicMock()
+        endpoint.display_name = "detect-cpu"
+        endpoint.labels = {"oe-device": "cuda"}
+        self._deploy(endpoint, device=None)
+        endpoint.update.assert_not_called()
+        endpoint.list_models.assert_not_called()
+
+
+class TestDeployDeviceVerification:
+    """The post-deploy runtime check: ask the container what ORT activated.
+
+    The check reads the live session's provider (via a runtime_info
+    predict), never the boot log — ORT can fall back to CPU while the
+    deployment looks healthy.
+    """
+
+    def _deploy(self, mock_endpoint, device):
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [mock_endpoint]
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            )
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="g2-standard-8",
+                min_replica_count=1,
+                max_replica_count=1,
+                device=device,
+            )
+
+    @staticmethod
+    def _endpoint_reporting(info):
+        endpoint = MagicMock()
+        endpoint.predict.return_value = MagicMock(predictions=[info])
+        return endpoint
+
+    def test_queries_runtime_info_after_deploy(self):
+        endpoint = self._endpoint_reporting(
+            {"active_provider": "CUDAExecutionProvider"}
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(endpoint, device="cuda")
+        endpoint.predict.assert_called_once_with(
+            instances=[{}], parameters={"runtime_info": True}
+        )
+
+    def test_warns_when_runtime_fell_back(self):
+        endpoint = self._endpoint_reporting({"active_provider": "CPUExecutionProvider"})
+        with pytest.warns(UserWarning, match="fell back"):
+            self._deploy(endpoint, device="cuda")
+
+    def test_trt_devices_expect_the_tensorrt_provider(self):
+        endpoint = self._endpoint_reporting(
+            {"active_provider": "CUDAExecutionProvider"}
+        )
+        with pytest.warns(UserWarning, match="TensorrtExecutionProvider"):
+            self._deploy(endpoint, device="tensorrt-fp16")
+
+    def test_warns_when_trt_tier_differs(self):
+        # bf16 asked, fp32 serving: both are TensorrtExecutionProvider, so
+        # only the container's resolved device string tells the tiers apart
+        endpoint = self._endpoint_reporting(
+            {"active_provider": "TensorrtExecutionProvider", "device": "tensorrt"}
+        )
+        with pytest.warns(UserWarning, match="resolved device='tensorrt'"):
+            self._deploy(endpoint, device="tensorrt-bf16")
+
+    def test_no_warning_when_provider_and_tier_match(self):
+        endpoint = self._endpoint_reporting(
+            {
+                "active_provider": "TensorrtExecutionProvider",
+                "device": "tensorrt-bf16",
+            }
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(endpoint, device="tensorrt-bf16")
+
+    def test_warns_when_check_call_fails(self):
+        """An unreachable check is 'unconfirmed', never a failed deploy."""
+        endpoint = MagicMock()
+        endpoint.predict.side_effect = RuntimeError("boom")
+        with pytest.warns(UserWarning, match="could not confirm"):
+            self._deploy(endpoint, device="cuda")
+
+    def test_old_image_response_only_logs(self):
+        # an image predating runtime_info answers the probe like a normal
+        # predict; that is unverifiable, not wrong — no warning
+        endpoint = self._endpoint_reporting({"status": "failed to download image"})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._deploy(endpoint, device="cuda")
+
+    def test_no_check_without_a_device(self):
+        endpoint = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as endpoint_class:
+            endpoint_class.list.return_value = [endpoint]
+            vertex_model = VertexModel(
+                vertex_model=MagicMock(),
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            )
+            vertex_model.deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="g2-standard-8",
+                min_replica_count=1,
+                max_replica_count=1,
+            )
+        endpoint.predict.assert_not_called()
+
+
+class TestDeployContainerLogging:
+    """Container logging stays on unless the caller opts out.
+
+    _warn_unless_device_active reports which provider a deployment landed
+    on, but only the container log says why it landed there.
+    """
+
+    def _deploy_kwargs(self, **kwargs):
+        mock_inner_model = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [MagicMock()]
+            VertexModel(
+                vertex_model=mock_inner_model,
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            ).deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="n1-standard-4",
+                min_replica_count=1,
+                max_replica_count=1,
+                **kwargs,
+            )
+        return mock_inner_model.deploy.call_args.kwargs
+
+    def test_container_logging_on_by_default(self):
+        assert self._deploy_kwargs()["disable_container_logging"] is False
+
+    def test_container_logging_can_be_disabled(self):
+        kwargs = self._deploy_kwargs(container_logging=False)
+        assert kwargs["disable_container_logging"] is True
+
+
+class TestDeployServiceAccount:
+    """The serving identity is per-deployment, defaulting to Vertex's own."""
+
+    def _deploy_kwargs(self, **kwargs):
+        mock_inner_model = MagicMock()
+        with patch("orient_express.vertex.aiplatform.Endpoint") as mock_endpoint_class:
+            mock_endpoint_class.list.return_value = [MagicMock()]
+            VertexModel(
+                vertex_model=mock_inner_model,
+                model_name="test",
+                project_name="p",
+                region="us-west1",
+                version=1,
+            ).deploy_to_endpoint(
+                endpoint_name="e",
+                machine_type="n1-standard-4",
+                min_replica_count=1,
+                max_replica_count=1,
+                **kwargs,
+            )
+        return mock_inner_model.deploy.call_args.kwargs
+
+    def test_defaults_to_vertex_managed_identity(self):
+        assert self._deploy_kwargs()["service_account"] is None
+
+    def test_user_managed_account_is_passed_through(self):
+        sa = "serving@example-project.iam.gserviceaccount.com"
+        assert self._deploy_kwargs(service_account=sa)["service_account"] == sa
