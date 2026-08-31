@@ -38,6 +38,7 @@ def mock_storage_client():
     """Creates a mock GCS storage client."""
     mock_client = MagicMock()
     mock_bucket = MagicMock()
+    mock_bucket.list_blobs.return_value = []  # artifact folder empty by default
     mock_client.bucket.return_value = mock_bucket
     return mock_client, mock_bucket
 
@@ -375,7 +376,9 @@ class TestVersioningLogic:
             "projects/test-project/locations/us-central1/models/model-id"
         )
         parent_model.name = "model-id"
-        parent_model.version_id = "3"
+        # Model.list surfaces the *default* version, which here is older than
+        # the newest registered version; the next version must still be max+1.
+        parent_model.version_id = "2"
         parent_model.update_time = datetime(2024, 3, 1)
 
         mock_registry = MagicMock()
@@ -405,9 +408,34 @@ class TestVersioningLogic:
                 bucket_name="test-bucket",
             )
 
-            # Should use v3 (latest by update_time) as parent
-            # Version should be 3 + 1 = 4
+            # Highest registered version is 3, so the new version is 3 + 1 = 4
+            # even though the default version is 2.
             assert result.version == 4
+
+    def test_refuses_to_overwrite_existing_artifact_folder(
+        self, mock_storage_client, mock_predictor
+    ):
+        """If the artifact folder already has files in GCS, raise before uploading."""
+        mock_client, mock_bucket = mock_storage_client
+        mock_bucket.list_blobs.return_value = [MagicMock()]
+
+        with (
+            patch("orient_express.vertex.storage.Client", return_value=mock_client),
+            patch("orient_express.vertex.aiplatform.Model") as mock_model_class,
+            patch("orient_express.vertex.aiplatform.init"),
+        ):
+            mock_model_class.list.return_value = []
+
+            with pytest.raises(FileExistsError):
+                upload_model(
+                    model=mock_predictor,
+                    model_name="new-model",
+                    project_name="test-project",
+                    region="us-central1",
+                    bucket_name="test-bucket",
+                )
+
+            mock_model_class.upload.assert_not_called()
 
 
 # -----------------------------------------------------------------------------
