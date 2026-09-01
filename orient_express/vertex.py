@@ -417,7 +417,15 @@ def upload_model_with_files(
         model_name, project_name, region, raise_exception=False
     )
     if parent_model:
-        version = parent_model.version + 1
+        # Next version = highest existing version + 1, matching how the registry
+        # assigns version ids. get_vertex_model returns the *default* version,
+        # which can be older than the newest one, so incrementing from it can
+        # collide with an existing artifact folder.
+        registry = aiplatform.models.ModelRegistry(
+            model=parent_model.vertex_model.resource_name
+        )
+        versions = VERTEX_RETRY(registry.list_versions)()
+        version = max(int(v.version_id) for v in versions) + 1
     else:
         version = 1
 
@@ -426,6 +434,11 @@ def upload_model_with_files(
 
     timeout = _resolve_upload_timeout(upload_timeout)
     artifact_dir = f"models/{model_name}/{version}/"
+    if next(iter(bucket.list_blobs(prefix=artifact_dir, max_results=1)), None):
+        raise FileExistsError(
+            f"gs://{bucket_name}/{artifact_dir} already contains files; "
+            "refusing to overwrite an existing model artifact"
+        )
     with ThreadPoolExecutor(max_workers=TRANSFER_MAX_WORKERS) as pool:
         futures = [
             pool.submit(
