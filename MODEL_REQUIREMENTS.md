@@ -46,7 +46,8 @@ A static batch-1 export loads, but:
   shape error;
 - `predict_stream` / `ImageLoader` batching and the throughput gains that
   motivate them are unavailable;
-- TensorRT profiles degenerate to min=opt=max at batch 1.
+- TensorRT profiles degenerate to min=opt=max at batch 1: `trt_batch` raises
+  for anything other than the pinned batch, since no profile can widen it.
 
 Static exports are considered out of compliance for production use
 (`dg-otc-detection` v1 is the standing example).
@@ -55,11 +56,17 @@ Static exports are considered out of compliance for production use
 
 Requirements beyond the above, roughly in the order they will bite:
 
-1. **An explicit optimization profile is mandatory.** Construction raises
-   unless `provider_options` carries all three of
-   `trt_profile_min/opt/max_shapes` covering every shape you will send
-   (ragged final batches included). Fixed-shape models declare
-   min = opt = max.
+1. **An optimization profile is mandatory.** Normally `trt_batch=N` (or
+   `(min, opt, max)`) supplies it: every dimension but the batch is pinned
+   by the graph, so the rest is read off the model. That requires the batch
+   to be **one symbolic dimension shared by every input** — multi-input
+   types (`images` + `target_sizes`) must use the same `dynamic_axes` name
+   for both, which `torch.onnx.export` does by default. A graph with two
+   distinct dynamic dims, a static export, or a uint8-partitioned graph
+   needing internal boundary tensors (item 3) can't be inferred and must
+   pass all three of `trt_profile_min/opt/max_shapes` in `provider_options`
+   covering every shape you will send (ragged final batches included);
+   fixed-shape models declare min = opt = max.
 2. **The graph must survive ORT's TRT capability pass.** Internal tensors
    need resolvable shapes — a graph that fails with `TensorRT input: X has
    no shape specified` cannot load on TRT at all (the current

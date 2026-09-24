@@ -201,12 +201,13 @@ predictor = BoundingBoxPredictor("/path/to/model", classes, device="cuda")
 
 # TensorRT ([tensorrt] extra): ~1.6x over CUDA at fp32; "tensorrt-fp16"
 # is ~3x over CUDA if the model tolerates fp16 (validate accuracy first).
-# TensorRT requires an optimization profile — see TensorRT Engine Caching.
+# TensorRT needs an optimization profile; trt_batch is the whole of it —
+# see "TensorRT Optimization Profiles".
 predictor = BoundingBoxPredictor(
-    "/path/to/model", classes, device="tensorrt", provider_options=PROFILE
+    "/path/to/model", classes, device="tensorrt", trt_batch=8
 )
 predictor = BoundingBoxPredictor(
-    "/path/to/model", classes, device="tensorrt-fp16", provider_options=PROFILE
+    "/path/to/model", classes, device="tensorrt-fp16", trt_batch=8
 )
 
 # "tensorrt-bf16": near-fp16 speed with fp32's dynamic range. The 16-bit
@@ -214,12 +215,115 @@ predictor = BoundingBoxPredictor(
 # DINOv3-backbone models, which carry ~1.5e5 residual activations and NaN
 # under fp16. Validate accuracy per model, same as fp16.
 predictor = BoundingBoxPredictor(
-    "/path/to/model", classes, device="tensorrt-bf16", provider_options=PROFILE
+    "/path/to/model", classes, device="tensorrt-bf16", trt_batch=8
 )
 
 # same values work when loading from Vertex
 predictor = model.get_local_predictor(device="cuda")
 ```
+
+#### Graph optimizations
+
+ONNX Runtime's graph fusions are enabled by default. Pass
+`graph_optimizations=False` (to a predictor constructor or `get_predictor`)
+to run the graph exactly as exported. Worth knowing about because the
+serving image sets it: that image is pinned to the CUDA-12 onnxruntime line,
+and 1.24.x mis-fuses DINOv3-backbone graphs badly enough to return a
+different answer in every process. Disabling fusion costs ~14-17% on
+RF-DETR through the CPU and CUDA providers, and nothing at all on TensorRT,
+which re-optimizes the graph itself.
+
+### Choosing the Serving Device at Deploy Time
+
+The runtime is a property of the *deployment*, not the model artifact, so
+`deploy_to_endpoint` takes it. Nothing about the device is recorded at
+upload: every model already in the registry can serve on any device, and one
+model version can serve different devices on different endpoints.
+
+```python
+model = get_vertex_model("pepsi-food-detection", project_name=..., region=...)
+
+# CPU endpoint
+model.deploy_to_endpoint("detect-cpu", "n1-standard-4", 1, 3)
+
+# same model version, L4 endpoint running TensorRT fp16
+model.deploy_to_endpoint(
+    "detect-gpu", "g2-standard-8", 1, 3,
+    accelerator_type="NVIDIA_L4", accelerator_count=1,
+    device="tensorrt-fp16",
+)
+```
+
+Vertex fixes a container's environment at model upload, so the device can't
+travel as an env var. It is recorded in an **`oe-device` label on the
+endpoint** instead, which the container reads at boot off the endpoint named
+by the `AIP_ENDPOINT_ID` variable Vertex injects. For a TensorRT device it
+also synthesizes the required optimization profile from the model's own
+inputs, covering batches 1..`TRT_MAX_BATCH_SIZE` and splitting larger
+requests.
+
+The endpoint carries it, rather than the deployed model, because Vertex
+attaches a model to its endpoint only after the container passes its health
+checks — a booting container asking for its own deployed model does not find
+it, and cannot wait for it either, since the registration it would be
+waiting on comes after the health check it would be blocking. The endpoint
+already exists when the container starts. A label rather than the display
+name, because the name is how you and your dashboards refer to an endpoint
+and this library does not rewrite it.
+
+A device therefore belongs to an endpoint and covers every model on it.
+Deploying a different device to an endpoint that already serves something
+is refused, with the fix in the message: use another endpoint, or undeploy
+that one first. An endpoint with nothing deployed yet is simply labelled.
+
+Omitting `device` lets the hardware decide: `cuda` when the deployment has a
+GPU attached, else `cpu`. CUDA is numerically identical to CPU on every model
+measured, so that default is free — it only stops an accelerator from sitting
+idle. The TensorRT tiers change the numbers and are never chosen for you.
+
+A device you *did* name is never second-guessed: it fails the rollout rather
+than quietly serving something else, so `tensorrt-fp16` on a model that NaNs
+under fp16 (e.g. a DINOv3 backbone) is a failed deployment, not bad
+predictions. Validate a device before deploying with it.
+
+Deploying a mismatched pair warns at the call site rather than waiting for
+the container to fail: a GPU device on a machine with no accelerator, or
+`device="cpu"` on a machine that has one. The first is only a warning
+because A2/G2 machine types carry GPUs without an `accelerator_count`.
+
+The container reads the endpoint through the Vertex API, so the service
+account it runs as needs `aiplatform.endpoints.get`. Without that permission
+the lookup warns and falls back to the hardware default — the deployment
+comes up healthy and serves, just not on the device that was asked for. The
+identity Vertex assigns by default may not carry that permission, so a
+`device=` deployment generally wants an explicit `service_account` (below).
+
+Passing `device` therefore makes `deploy_to_endpoint` check the live
+container afterwards and warn if the provider it ended up on isn't the one
+requested. The container log names the device it resolved
+(`serving device: ...`) and records why if it could not honour the token;
+`container_logging` keeps that stream on by default for this reason, and
+`container_logging=False` opts out.
+
+Which account that is depends on how the deployment runs. Left unset, the
+container runs under an identity Vertex assigns, shared with other custom
+containers in the project — so a permission granted for one is granted for
+all of them, and it is not guaranteed to include `endpoints.get`.
+`service_account` names one per deployment instead:
+
+```python
+model.deploy_to_endpoint(
+    "detect-gpu", "g2-standard-8", 1, 3,
+    accelerator_type="NVIDIA_L4", accelerator_count=1,
+    device="tensorrt-fp16",
+    service_account="serving@my-project.iam.gserviceaccount.com",
+)
+```
+
+A user-managed account keeps this deployment's permissions to itself, but it
+replaces the default identity entirely, so it needs everything the container
+does: read access to the model's artifacts, Logging and Monitoring writes,
+and `aiplatform.endpoints.get` when `device` is set.
 
 ### TensorRT Engine Caching
 
@@ -268,12 +372,38 @@ build itself — the org-wide cache pays off when builds are slow relative to
 the download (bigger models, datacenter GPUs like L4, where builds take
 minutes).
 
+### TensorRT Optimization Profiles
+
 Engines are compiled for a shape range (the optimization profile), so one
 engine covers every batch size you send. TensorRT devices require the
 profile — loading raises without one, because TRT would otherwise compile
 for the first shape it sees and any new shape would mean another
-multi-minute build (for a fixed-shape model, declare its exact shapes with
-min = opt = max):
+multi-minute build.
+
+Every dimension except the batch is pinned by the graph, so `trt_batch` is
+normally the whole profile:
+
+```python
+# engine covers batches 1..32, tuned for 32
+predictor = BoundingBoxPredictor(path, classes, device="tensorrt", trt_batch=32)
+
+# (min, opt, max) when the dominant shape isn't the largest — serving mostly
+# gets single images but must tolerate bigger requests
+predictor = BoundingBoxPredictor(path, classes, device="tensorrt",
+                                 trt_batch=(1, 1, 8))
+```
+
+A bare `N` means `(1, N, N)`: min stays 1 so a ragged final batch stays in
+profile, and opt tunes for `N`. The rest of each input's shape is read off
+the model, and the batch is matched by its ONNX symbolic dim name, so
+multi-input models (detection's `images` + `target_sizes`) get consistent
+bounds on every input automatically.
+
+Two cases can't be inferred and raise instead: a model with more than one
+distinct dynamic dimension (which one is the batch?), and a static export,
+which can only ever serve its pinned batch. Both — plus graphs whose TRT
+partition has internal dynamic inputs, e.g. `/Transpose_output_0` — take
+explicit shapes instead:
 
 ```python
 predictor = BoundingBoxPredictor(
@@ -286,9 +416,9 @@ predictor = BoundingBoxPredictor(
 )
 ```
 
-Out-of-profile inputs raise a clear error instead of being handed to ORT
-(which would fail the call and silently run it on CUDA — an invisible
-performance downgrade in production).
+Pass one or the other, never both. Out-of-profile inputs raise a clear error
+instead of being handed to ORT (which would fail the call and silently run
+it on CUDA — an invisible performance downgrade in production).
 
 ### Streaming and Pipelined Inference
 

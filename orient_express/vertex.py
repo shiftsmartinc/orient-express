@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 import tempfile
@@ -12,6 +13,7 @@ import yaml
 from google.cloud import aiplatform, storage
 from google.cloud.storage import transfer_manager
 
+from .devices import ALL_DEVICES, DEVICE_TO_PROVIDER, Device
 from .utils.paths import get_cache_dir
 from .utils.retry import get_gcs_retry_policy, get_vertex_retry_policy
 
@@ -62,6 +64,26 @@ def _resolve_upload_timeout(timeout: float | None) -> float:
     return float(timeout)
 
 
+# Endpoint label carrying the device for everything deployed on that
+# endpoint. A label, not the display name: the name is how dashboards and
+# humans refer to an endpoint, and this library has no business rewriting
+# one. Device strings are all lowercase alphanumerics and hyphens, which is
+# exactly what GCP label values allow.
+_DEVICE_LABEL = "oe-device"
+
+
+def _device_from_labels(labels) -> str | None:
+    """The device a set of endpoint labels names, or None if none does."""
+    return (labels or {}).get(_DEVICE_LABEL)
+
+
+# Machine families whose GPUs are built into the machine type, so
+# accelerator_count=0 does not mean "no GPU" for them. Used only to suppress
+# a warning — the list going stale as GCP adds families must never block a
+# deployment, which is why the check below warns instead of raising.
+_GPU_MACHINE_PREFIXES = ("a2-", "a3-", "g2-")
+
+
 class VertexModel:
     def __init__(
         self,
@@ -85,22 +107,192 @@ class VertexModel:
         machine_type: str,
         min_replica_count: int,
         max_replica_count: int,
+        accelerator_type: str | None = None,
+        accelerator_count: int = 0,
+        device: str | None = None,
+        container_logging: bool = True,
+        service_account: str | None = None,
     ):
-        endpoint = self.get_or_create_endpoint(endpoint_name)
+        """Deploy this model version to an endpoint.
+
+        `device` picks the inference runtime for THIS deployment ('cpu',
+        'cuda', 'tensorrt', 'tensorrt-fp16', 'tensorrt-bf16') — the same
+        model version can serve different devices on different endpoints,
+        no re-upload. It is recorded in an `oe-device` label on the
+        ENDPOINT, which the serving container reads at boot (see
+        get_endpoint_device), failing loudly if that device can't load.
+        The label covers every model on that endpoint, so one endpoint
+        serves one device: asking an occupied endpoint for a different one
+        is refused rather than moving what is already serving there. The
+        endpoint's name is never touched. Default None lets the container
+        pick from its hardware: cuda when a GPU is attached, else cpu. Only
+        the TensorRT tiers, which change the numbers, have to be asked for
+        by name.
+
+        `container_logging` keeps the container's stdout/stderr flowing to
+        Cloud Logging. _warn_unless_device_active already reports the
+        provider a deployment ended up on, but only the container log says
+        WHY — the boot line naming the device it resolved, and the warning
+        when it could not read the token at all. Pass False to opt out of
+        the log cost.
+
+        `service_account` is the identity the serving container runs as.
+        Left unset, Vertex uses its own custom-code agent — one identity
+        shared by every custom container in the project, so any permission
+        it holds is held by all of them. Naming a user-managed account
+        confines this deployment's permissions to it, at the cost of
+        granting that account everything the container needs: read on the
+        model's artifacts, Logging and Monitoring writes, and
+        `aiplatform.endpoints.get` if `device` is used, since the token is
+        read back through the Vertex API.
+        """
+        if device is not None and device not in ALL_DEVICES:
+            raise ValueError(
+                f"device must be one of {', '.join(ALL_DEVICES)} (got {device!r})"
+            )
+        if device == Device.CPU and accelerator_count:
+            # Explicitly pinning cpu on a GPU machine means paying for an
+            # accelerator inference will never touch.
+            warnings.warn(
+                f"Deploying with {accelerator_count}x {accelerator_type} but "
+                "device='cpu': the container will not use the GPU. Drop the "
+                "device argument to let it pick cuda automatically.",
+                stacklevel=2,
+            )
+        if (
+            device is not None
+            and device != Device.CPU
+            and not accelerator_count
+            and not machine_type.startswith(_GPU_MACHINE_PREFIXES)
+        ):
+            # The container fails loudly at boot when the GPU provider can't
+            # load, but that costs an image pull and a model download to
+            # discover; say it here instead. Only a warning: A2/G2-style
+            # machines carry GPUs without an accelerator_count, so this
+            # cannot prove the deployment is wrong.
+            warnings.warn(
+                f"device={device!r} needs a GPU, but {machine_type} was "
+                "deployed with no accelerator — the container will fail to "
+                "start. Pass accelerator_type/accelerator_count, or use a "
+                "GPU machine type.",
+                stacklevel=2,
+            )
+        # The endpoint carries the token and must already do so when the
+        # container boots, so name it before deploying, not after.
+        endpoint = self.get_or_create_endpoint(endpoint_name, device)
         VERTEX_RETRY(self.vertex_model.deploy)(
             endpoint=endpoint,
+            deployed_model_display_name=self.model_name,
             machine_type=machine_type,
             min_replica_count=min_replica_count,
             max_replica_count=max_replica_count,
+            accelerator_type=accelerator_type,
+            accelerator_count=accelerator_count,
+            # the SDK spells this inverted; keep the caller's argument
+            # positive so container_logging=False is the unusual choice
+            disable_container_logging=not container_logging,
+            service_account=service_account,
             traffic_percentage=100,
         )
+        if device is not None:
+            self._warn_unless_device_active(endpoint, device)
 
-    def get_or_create_endpoint(self, endpoint_name: str):
+    def _warn_unless_device_active(self, endpoint, device: str):
+        """Post-deploy check: did onnxruntime really activate `device`?
+
+        Asks the live container which execution provider its ORT session
+        holds (a runtime_info predict, answered from session.get_providers()
+        — see serving.runtime_info_response) and warns on mismatch. The
+        session is the ground truth: the boot log only records which device
+        the server *asked* for, and ORT can fall back (typically to CPU)
+        without failing the deployment on serving images that predate
+        create_session's fail-loud check. Safe to send right after deploy():
+        the new DeployedModel takes 100% of traffic. Advisory by design — a
+        deployment that serves fine is never failed here, and a container
+        too old to answer runtime_info just logs.
+        """
+        expected = DEVICE_TO_PROVIDER[device]
+        try:
+            response = VERTEX_RETRY(endpoint.predict)(
+                instances=[{}], parameters={"runtime_info": True}
+            )
+            predictions = response.predictions
+            info = predictions[0] if predictions else None
+        except Exception as e:  # noqa: BLE001 - advisory only
+            warnings.warn(
+                f"deployed with device={device!r}, but the post-deploy "
+                f"runtime check failed ({e}); could not confirm that "
+                f"onnxruntime activated {expected}.",
+                stacklevel=3,
+            )
+            return
+        active = info.get("active_provider") if isinstance(info, dict) else None
+        if not isinstance(active, str):
+            logging.info(
+                f"serving container did not report its runtime (serving "
+                f"image predates runtime_info?); device={device!r} was "
+                "stamped but not verified"
+            )
+            return
+        if active != expected:
+            warnings.warn(
+                f"deployed with device={device!r}, which should run on "
+                f"{expected}, but the serving container reports its "
+                f"onnxruntime session activated {active} — the runtime fell "
+                "back. Check the deployment's accelerator and the serving "
+                "image's GPU stack.",
+                stacklevel=3,
+            )
+            return
+        reported = info.get("device")
+        if isinstance(reported, str) and reported != device:
+            # Same provider, different device string — the TensorRT tiers
+            # (fp32/fp16/bf16) all activate TensorrtExecutionProvider, so
+            # only the device the container resolved can tell them apart.
+            warnings.warn(
+                f"deployed with device={device!r} but the serving container "
+                f"resolved device={reported!r}; {expected} is active, but "
+                "not at the requested tier. The device= token is not "
+                "reaching the container as sent — check the serving "
+                "account's aiplatform.endpoints.get permission and that the "
+                "serving image supports this device.",
+                stacklevel=3,
+            )
+
+    def get_or_create_endpoint(self, endpoint_name: str, device: str | None = None):
         endpoint = self.get_endpoint(endpoint_name)
-        if endpoint:
-            return endpoint
-        else:
-            return self.create_endpoint(endpoint_name)
+        if endpoint is None:
+            return self.create_endpoint(endpoint_name, device)
+        if device is not None:
+            self._label_endpoint_device(endpoint, device)
+        return endpoint
+
+    def _label_endpoint_device(self, endpoint, device: str):
+        """Ensure the endpoint is labelled for `device`, or refuse.
+
+        The label applies to every model on the endpoint, so changing it
+        would hand a different device to whatever is already serving there
+        the next time one of its replicas restarts. It is therefore only
+        written onto an endpoint that has nothing deployed yet; otherwise a
+        mismatch is refused and the caller picks another endpoint.
+        """
+        labelled = _device_from_labels(getattr(endpoint, "labels", None))
+        if labelled == device:
+            return
+        deployed = list(VERTEX_RETRY(endpoint.list_models)())
+        if deployed:
+            raise ValueError(
+                f"endpoint '{endpoint.display_name}' already serves "
+                f"{len(deployed)} model(s) on "
+                f"device={labelled or 'the container default'!r}, so it cannot "
+                f"also serve device={device!r}: the device is a property of the "
+                "endpoint and changing it would move the models already there. "
+                "Deploy to a different endpoint, or undeploy this one first."
+            )
+        labels = dict(getattr(endpoint, "labels", None) or {})
+        labels[_DEVICE_LABEL] = device
+        VERTEX_RETRY(endpoint.update)(labels=labels)
+        self._endpoint_cache.pop(endpoint.display_name, None)
 
     def get_endpoint(self, endpoint_name: str):
         # Endpoint.list is a full API round-trip; resolve each name once per
@@ -115,11 +307,12 @@ class VertexModel:
             self._endpoint_cache[endpoint_name] = endpoints[0]
             return endpoints[0]
 
-    def create_endpoint(self, endpoint_name: str):
+    def create_endpoint(self, endpoint_name: str, device: str | None = None):
         endpoint = VERTEX_RETRY(aiplatform.Endpoint.create)(
             display_name=endpoint_name,
             project=self.project_name,
             location=self.region,
+            labels={_DEVICE_LABEL: device} if device is not None else None,
         )
         self._endpoint_cache[endpoint_name] = endpoint
         return endpoint
@@ -277,6 +470,81 @@ def download_artifacts(dir: str, artifact_uri: str, force_download: bool = True)
         ]
         for future in futures:
             future.result()
+
+
+def _gce_metadata(path: str) -> str:
+    """Read one key from the GCE metadata server.
+
+    Reachable inside Vertex serving containers — it is what supplies the
+    application-default credentials the artifact download already relies on.
+    """
+    import requests
+
+    response = requests.get(
+        f"http://metadata.google.internal/computeMetadata/v1/{path}",
+        headers={"Metadata-Flavor": "Google"},
+        timeout=5,
+    )
+    response.raise_for_status()
+    return response.text
+
+
+def _serving_project_and_region() -> tuple[str, str]:
+    """Project and region of the Vertex deployment running this process.
+
+    Vertex documents AIP_ENDPOINT_ID and AIP_DEPLOYED_MODEL_ID but not a
+    project/region pair for serving containers, so both come from the
+    metadata server (AIP_PROJECT_NUMBER short-circuits it where present).
+    """
+    project = os.environ.get("AIP_PROJECT_NUMBER") or _gce_metadata(
+        "project/numeric-project-id"
+    )
+    zone = _gce_metadata("instance/zone").rsplit("/", 1)[-1]  # e.g. us-west1-b
+    return project, zone.rsplit("-", 1)[0]
+
+
+def get_endpoint_device() -> str | None:
+    """The device= token of the endpoint this process is serving on.
+
+    Vertex fixes container env at model upload, so per-deployment intent
+    cannot arrive as an env var; deploy_to_endpoint(device=...) stamps it
+    into the endpoint's display name instead, and this reads it back
+    through AIP_ENDPOINT_ID.
+
+    The endpoint rather than the DeployedModel, because Vertex attaches a
+    DeployedModel to its endpoint only once the container has passed its
+    health checks: a booting container asking for its own DeployedModel
+    does not find it, and cannot wait for it either, since registration is
+    downstream of the health check it would be blocking. The endpoint
+    exists before the container starts, so reading it has no such race.
+
+    Returns None when not on Vertex, when no token was stamped, or when the
+    lookup fails (no aiplatform.endpoints.get on the serving identity, API
+    outage) — the caller then serves on its default device, so this can
+    never brick a deployment that did not ask for one.
+    """
+    endpoint_id = os.environ.get("AIP_ENDPOINT_ID")
+    if not endpoint_id:
+        return None
+    try:
+        project, region = _serving_project_and_region()
+        endpoint = aiplatform.Endpoint(
+            endpoint_name=(
+                f"projects/{project}/locations/{region}/endpoints/{endpoint_id}"
+            ),
+            project=project,
+            location=region,
+        )
+        # the constructor is lazy, so this getattr is what forces the GET;
+        # retried because it runs during container boot, where a transient
+        # 503 would otherwise silently cost the deployment its device
+        return _device_from_labels(VERTEX_RETRY(getattr)(endpoint, "labels"))
+    except Exception as e:  # noqa: BLE001 - never brick a boot over this
+        logging.warning(
+            f"could not read deploy-time device from endpoint {endpoint_id} "
+            f"({e}); falling back to the default device"
+        )
+    return None
 
 
 def upload_model(

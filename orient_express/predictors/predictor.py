@@ -15,7 +15,13 @@ from PIL import Image
 from ..utils.colors import generate_color_scheme
 from ..utils.image_processor import image_to_array, image_to_base64
 from ..utils.paths import get_metadata_path
-from .runtime import _TRT_DEVICES, Device, create_session, parse_trt_profile_shapes
+from .runtime import (
+    TENSORRT_DEVICES,
+    Device,
+    apply_trt_batch,
+    create_session,
+    parse_trt_profile_shapes,
+)
 
 IMAGE_ONNX_IMAGE_REPO = (
     "us-west1-docker.pkg.dev/shiftsmart-api/orient-express/image-onnx"
@@ -122,9 +128,22 @@ class ImagePredictor(Predictor):
         classes: dict[int, str] | None = None,
         device: str = Device.CPU,
         provider_options: dict | None = None,
+        trt_batch: int | tuple[int, int, int] | None = None,
+        graph_optimizations: bool = True,
     ):
+        # TensorRT needs an optimization profile, but the only choice in one
+        # is the batch range; trt_batch takes just that and reads the rest of
+        # each input's shape off the model. Explicit trt_profile_* strings in
+        # provider_options stay the escape hatch — required for graphs whose
+        # TRT partition has internal dynamic inputs, whose names no synthesis
+        # can know.
+        if trt_batch is not None:
+            provider_options = apply_trt_batch(
+                model_path, device, trt_batch, provider_options
+            )
+
         self._trt_profile_bounds = None
-        if device in _TRT_DEVICES and provider_options:
+        if device in TENSORRT_DEVICES and provider_options:
             # Validate profile syntax before the session is created: ORT
             # ignores a malformed spec with only a log warning and profiles
             # the first shape it sees instead of the intended range — and a
@@ -147,8 +166,17 @@ class ImagePredictor(Predictor):
                     parsed["trt_profile_max_shapes"],
                 )
 
+        # graph_optimizations=False runs the graph as exported. ORT's fusions
+        # are on by default and normally cost no accuracy, but onnxruntime
+        # 1.24.x fuses DINOv3-backbone graphs into something that reads
+        # uninitialized memory: identical inputs give a different answer in
+        # every process (measured up to 0.12 on a 0-1 score, on both the CPU
+        # and CUDA providers, at every optimization tier). 1.27 fixes it but
+        # dropped CUDA 12, which Vertex's L4 driver requires — so the serving
+        # container turns fusion off. Cost: ~14-17% on RF-DETR via CPU/CUDA,
+        # nothing on TensorRT (it re-optimizes anyway) or on DINOv3.
         self.session, self._trt_cache_sync = create_session(
-            model_path, device, provider_options
+            model_path, device, provider_options, graph_optimizations
         )
 
         self.input_names = [inp.name for inp in self.session.get_inputs()]
@@ -222,6 +250,20 @@ class ImagePredictor(Predictor):
                 # multi-minute build
                 self._trt_cache_sync.schedule_upload()
         return outputs
+
+    @property
+    def max_batch_size(self) -> int | None:
+        """Largest batch the active TensorRT profile accepts, or None.
+
+        None means no declared bound (cpu/cuda, or TRT without parseable
+        profile bounds). Servers use this to chunk oversized requests
+        instead of tripping the out-of-profile check in infer().
+        """
+        if self._trt_profile_bounds is None:
+            return None
+        _, hi = self._trt_profile_bounds
+        batches = [dims[0] for dims in hi.values() if dims]
+        return min(batches) if batches else None
 
     def _check_trt_profile(self, feed):
         """Raise on inputs outside the declared TensorRT optimization profile.
