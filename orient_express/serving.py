@@ -45,7 +45,26 @@ SERVER_PARAM_DEFAULTS = {"confidence": 0.5}
 
 # Request parameters that steer the server itself and must not be forwarded
 # to predict().
-RESERVED_PARAMETERS = {"debug_image"}
+RESERVED_PARAMETERS = {"debug_image", "runtime_info"}
+
+
+def runtime_info_response(model, device: str | None) -> dict:
+    """Answer a `runtime_info` request: which backend is actually serving.
+
+    deploy_to_endpoint(device=...) sends `parameters: {"runtime_info": true}`
+    after deploying and compares `active_provider` against the device it asked
+    for. The answer comes from the live ORT session (get_providers()), never
+    from the device the server resolved at boot: the session is the ground
+    truth on whether onnxruntime quietly fell back to another provider.
+    Models without an ORT session (joblib artifacts) report the device alone.
+    """
+    info: dict = {"device": device}
+    session = getattr(model, "session", None)
+    if session is not None:
+        providers = list(session.get_providers())
+        info["providers"] = providers
+        info["active_provider"] = providers[0] if providers else None
+    return {"predictions": [info]}
 
 
 def decode_input(input_data):

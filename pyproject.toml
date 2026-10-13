@@ -74,14 +74,20 @@ dev = [
     "scikit-learn>=1.5.0,<2",
 ]
 # The inference-server Docker images are not part of the published library;
-# this group exists only for building those images. pandas, scikit-learn, and
-# xgboost aren't imported by the library — the images need them to unpickle
-# and run joblib model artifacts (and pandas for the sklearn server's
-# DataFrame input). Serving versions must stay compatible with the versions
-# models were trained with.
+# these groups exist only for building those images. `server` is what both
+# need: the kserve harness itself.
 server = [
     "kserve>=0.16,<0.17",
     "python-json-logger>=4.0,<5",
+]
+# The joblib/tabular image only. pandas, scikit-learn and xgboost aren't
+# imported by the library — that image needs them to unpickle and run joblib
+# artifacts (and pandas for the sklearn server's DataFrame input). Serving
+# versions must stay compatible with the versions models were trained with.
+# Kept out of `server` so the ONNX image, which never unpickles one, doesn't
+# carry ~500MB it cannot use.
+server-tabular = [
+    { include-group = "server" },
     "pandas>=2.0,<3",
     "scikit-learn>=1.5.0,<2",
     "xgboost>=2.0.0,<3",

@@ -17,7 +17,6 @@ half — that no module quietly grows a fourth policy of its own.
 """
 
 import logging
-import time
 
 import pytest
 from google.api_core import exceptions as api_exceptions
@@ -133,16 +132,17 @@ class TestHouseRetryDecorator:
 
     def test_does_not_sleep_after_the_final_attempt(self):
         """3 attempts means 2 gaps. A trailing sleep only delays the failure."""
+        delays = []
 
         @retry(retries=3, initial_timeout=0.1, max_timeout=0.1)
         def always_fails():
             raise ZeroDivisionError
 
-        started = time.perf_counter()
         with pytest.raises(ZeroDivisionError):
-            always_fails()
-        elapsed = time.perf_counter() - started
-        assert 0.15 < elapsed < 0.35, f"expected ~0.2s for two gaps, got {elapsed:.2f}s"
+            with_patched_sleep(delays, always_fails)
+        # the gaps themselves, not elapsed wall time: a hosted runner's
+        # scheduling jitter dwarfs a 0.2s budget and made this flake
+        assert delays == [0.1, 0.1]
 
     def test_backoff_is_capped(self):
         delays = []

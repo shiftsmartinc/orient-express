@@ -5,6 +5,7 @@ from typing import Any, TypeVar, overload
 import joblib
 import yaml
 
+from ..devices import TENSORRT_DEVICES, Device
 from ..utils.image_processor import decode_image
 from ..utils.paths import get_metadata_path
 from .classification import ClassificationPrediction, ClassificationPredictor
@@ -20,7 +21,7 @@ from .multi_label_classification import (
 )
 from .object_detection import BoundingBoxPrediction, BoundingBoxPredictor
 from .predictor import PREDICTOR_REGISTRY, ImagePredictor, Predictor
-from .runtime import Device
+from .runtime import gpu_available
 from .semantic_segmentation import (
     SemanticSegmentationPrediction,
     SemanticSegmentationPredictor,
