@@ -9,13 +9,13 @@ WORKDIR /app
 # The uv cache lives in a build-time mount so wheels never land in a layer.
 COPY pyproject.toml uv.lock .python-version ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --group server --extra cpu \
+    uv sync --frozen --no-install-project --no-dev --group server-tabular --extra cpu \
     --no-install-package nvidia-nccl-cu12
 
 COPY README.md ./
 COPY orient_express/ orient_express/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --group server --extra cpu --no-install-package nvidia-nccl-cu12
+    uv sync --frozen --no-dev --group server-tabular --extra cpu --no-install-package nvidia-nccl-cu12
 
 # Runtime stage: just the interpreter and the venv, no uv or build leftovers.
 # No ca-certificates needed: all HTTPS goes through certifi-bundled clients.
